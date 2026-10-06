@@ -125,6 +125,7 @@ if dev_csv:
 today = dt.datetime.now(db.IST).date()
 
 file_lines = None
+chosen_window = None            # (start, end) of the period currently picked in the menu
 with st.container(border=True):
     cs, cf = st.columns([1.2, 5])
     source = cs.radio("Data source", source_opts, horizontal=False) if len(source_opts) > 1 else source_opts[0]
@@ -136,42 +137,51 @@ with st.container(border=True):
         if up is not None:
             file_lines = db.load_csv(up)
         else:
-            cs.write(""); st.info("Upload the CSV, or add the database secrets (see README) to read live data."); st.stop()
+            st.info("Upload the CSV, or add the database secrets (see README) to read live data."); st.stop()
 
-    if live:
-        presets = ["Last 7 days", "Last 30 days", "Last 90 days", "This month", "Last month", "Custom"]
-        default_idx = 1
-    else:
-        presets = ["All data in file", "Custom"]
-        default_idx = 0
-    with cf.form(f"range_{source}"):
-        f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
-        preset = f1.selectbox("Period", presets, index=default_idx)
+    presets = (["Last 7 days", "Last 30 days", "Last 90 days", "This month", "Last month", "Custom"] if live
+               else ["All data in file", "Custom"])
+    p1, p2, p3, p4 = cf.columns([2, 2, 2, 1])
+    preset = p1.selectbox("Period", presets, index=None, placeholder="Select a period", key=f"preset_{source}")
+    d_from = d_to = None
+    if preset == "Custom":                       # the two date boxes appear only for Custom
         if live:
-            d_from = f2.date_input("From (custom)", value=today - dt.timedelta(days=29))
-            d_to = f3.date_input("To (custom)", value=today)
+            lo, hi, v_from, v_to = None, None, today - dt.timedelta(days=29), today
         else:
-            fmin = file_lines["make_list_created_at"].min().date(); fmax = file_lines["make_list_created_at"].max().date()
-            d_from = f2.date_input("From (custom)", value=fmin, min_value=fmin, max_value=fmax)
-            d_to = f3.date_input("To (custom)", value=fmax, min_value=fmin, max_value=fmax)
-        f4.write(""); f4.form_submit_button("Load")
+            lo = file_lines["make_list_created_at"].min().date(); hi = file_lines["make_list_created_at"].max().date()
+            v_from, v_to = lo, hi
+        d_from = p2.date_input("From", value=v_from, min_value=lo, max_value=hi, key=f"from_{source}")
+        d_to = p3.date_input("To", value=v_to, min_value=lo, max_value=hi, key=f"to_{source}")
+    load_clicked = p4.button("Load", type="primary", disabled=preset is None)
 
-if preset == "Custom":
-    start, end = d_from, d_to
-elif preset == "All data in file":
-    start, end = file_lines["make_list_created_at"].min().date(), file_lines["make_list_created_at"].max().date()
-elif preset == "Last 7 days":
-    start, end = today - dt.timedelta(days=6), today
-elif preset == "Last 30 days":
-    start, end = today - dt.timedelta(days=29), today
-elif preset == "Last 90 days":
-    start, end = today - dt.timedelta(days=89), today
-elif preset == "This month":
-    start, end = today.replace(day=1), today
-else:  # Last month
-    first_this = today.replace(day=1); end = first_this - dt.timedelta(days=1); start = end.replace(day=1)
-if end < start:
-    st.error("'To' is before 'From'."); st.stop()
+    if preset == "Custom":
+        chosen_window = (d_from, d_to)
+    elif preset == "All data in file":
+        chosen_window = (file_lines["make_list_created_at"].min().date(), file_lines["make_list_created_at"].max().date())
+    elif preset == "Last 7 days":
+        chosen_window = (today - dt.timedelta(days=6), today)
+    elif preset == "Last 30 days":
+        chosen_window = (today - dt.timedelta(days=29), today)
+    elif preset == "Last 90 days":
+        chosen_window = (today - dt.timedelta(days=89), today)
+    elif preset == "This month":
+        chosen_window = (today.replace(day=1), today)
+    elif preset == "Last month":
+        _end = today.replace(day=1) - dt.timedelta(days=1)
+        chosen_window = (_end.replace(day=1), _end)
+
+# nothing is read until Load is pressed; the loaded period then stays while settings / tabs change
+if load_clicked and chosen_window:
+    if chosen_window[1] < chosen_window[0]:
+        st.error("'To' is before 'From'."); st.stop()
+    st.session_state["loaded"] = {"source": source, "start": chosen_window[0], "end": chosen_window[1]}
+loaded = st.session_state.get("loaded")
+if not loaded or loaded["source"] != source:
+    st.info("Choose a period above and press **Load** to read the data.")
+    st.stop()
+start, end = loaded["start"], loaded["end"]
+if chosen_window and chosen_window != (start, end):
+    st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}. You picked a different period - press **Load** to apply it.")
 if live and (end - start).days > 120:
     st.warning("Large date range - this reads a lot of rows from the database and may take a while.")
 

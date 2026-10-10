@@ -24,10 +24,24 @@ S = Settings()
 with settings_pop:
     st.markdown("**Settings** - every number on this page recalculates from these")
     S.benchmark_sec = st.number_input("Recorded average picking rate (sec/item)", value=config.STUDY_PICKING_SEC_PER_ITEM, step=0.01, format="%.2f",
-                                      help="From the time study (Overall Picking Rate, 20 clean cycles). Everything is compared with this average.")
+                                      help="From the time study (Overall Picking Rate, 20 clean cycles). Used by the old pieces-only model; shown as a reference otherwise.")
     S.allowance = st.number_input("Allowance on average (%)", value=0.0, step=1.0, min_value=0.0,
                                   help="Optional extra time allowed for fatigue or small interruptions. 0% = compare with the pure recorded average.") / 100
-    st.caption(f"Benchmark used for comparison: **{S.bench:.2f} sec/item**")
+    S.model = st.radio("Standard model", [2, 1], format_func=lambda x: "Pieces + distinct SKUs (recommended)" if x == 2 else "Pieces only (old)", key="pick_model",
+                       help="A list's time depends on walking to each SKU as well as on picking the pieces. Model 2 allows for both, so lists with fewer pieces per SKU (evenings) are not penalised.")
+    if S.model == 2:
+        S.b_piece = st.number_input("Seconds per piece (b)", value=config.PICK_STD_B_PIECE, step=0.05, format="%.2f", key="pick_b",
+                                    help="Extra seconds for each piece picked. Fitted on real lists.")
+        S.c_sku = st.number_input("Seconds per distinct SKU (c)", value=config.PICK_STD_C_SKU, step=0.5, format="%.2f", key="pick_c",
+                                  help="Seconds for each different drug on the list (walking to the slot, finding it, scanning it). Fitted on real lists.")
+        _lvl = st.radio("Standard level", ["Typical actual pace (team = 100%)", "Time-study pace"], key="pick_level_mode",
+                        help="Typical actual pace is scaled so the team as a whole sits near 100%, as in Packing: above 100% = faster than the team's usual pace. "
+                             "Time-study pace is stricter: it reproduces your 20 recorded study lists, so everyone sits well below 100%.")
+        S.level_mode = "study" if _lvl.startswith("Time") else "typical"
+        st.caption(f"Standard for a typical list (224 pieces, 47 SKUs): **{S.std_seconds(224, 47) / 60:.1f} min** (scale {S.k:.2f})")
+    else:
+        st.caption(f"Benchmark used for comparison: **{S.bench:.2f} sec/item**")
+    fit_note = st.empty()
     S.basis = st.radio("Picking time basis", [1, 2], format_func=lambda x: "1: creation to last scan" if x == 1 else "2: first scan to last scan",
                        help="1 = from make list creation to last scan (how the study was timed). 2 = first scan to last scan for every list.")
     S.min_pieces = st.number_input("Min pieces for a list to be rated", value=60, step=5, min_value=0,
@@ -142,6 +156,10 @@ S.lead_allowance_min = auto_lead if lead_auto else lead_manual
 lead_note.caption(f"Median lead-in of normal lists in this period: {auto_lead} min. In use: **{S.lead_allowance_min:g} min**")
 
 rated = eff.rate_lists(lists, S)
+_fit = eff.fit_shape(rated)
+if _fit:
+    fit_note.caption(f"Fitted on this period ({_fit[2]:,} rated lists, within each person): {_fit[0]:.2f} s per piece, {_fit[1]:.2f} s per SKU, "
+                     f"scale for team = 100%: {_fit[4]:.2f} (R2 {_fit[3]:.2f}). Compare with the values above to see whether the standard needs refreshing.")
 all_execs = eff.exec_order(rated)
 st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by list creation) - {len(lines):,} lines read, {len(rated):,} make lists. "
            "Weeks and months at the edges of the period may be partial.")
@@ -155,10 +173,14 @@ ov = eff.overview_table(view, S)
 tot = ov.loc["All executives"]
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}")
-c2.metric("Benchmark (sec/item)", f"{S.bench:.2f}", help="Recorded average x (1 + allowance)")
+if S.model == 2:
+    c2.metric("Standard for a typical list", f"{S.std_seconds(224, 47) / 60:.1f} min", help="224 pieces, 47 distinct SKUs - the average list. Standard seconds = scale x (b x pieces + c x SKUs).")
+else:
+    c2.metric("Benchmark (sec/item)", f"{S.bench:.2f}", help="Recorded average x (1 + allowance)")
 c3.metric("Pieces picked", f"{int(tot['pieces_all']):,}", help=f"{int(tot['pieces_rated']):,} rated, {int(tot['pieces_not_rated']):,} not rated")
 c4.metric("Lists flagged for review", f"{int(tot['lists_flagged']):,}")
-st.caption("100% = at the recorded average; above 100% = faster. Only picking is compared - assembly has no usable timestamps.")
+st.caption(("100% = at the standard for the list's pieces and SKUs; above 100% = faster. " if S.model == 2 else "100% = at the recorded average; above 100% = faster. ")
+           + "Only picking is compared - assembly has no usable timestamps.")
 
 tab_ov, tab_w, tab_m, tab_d, tab_f, tab_how = st.tabs(["Recorded vs actual", "Weekly", "Monthly", "Daily", "Review flags", "How it works"])
 
@@ -175,13 +197,13 @@ with tab_ov:
         "Lists picked": t["lists_picked"].astype(int), "Pieces picked (all)": t["pieces_all"].astype(int),
         "Lists rated": t["lists_rated"].astype(int), "Pieces rated": t["pieces_rated"].astype(int),
         "Pieces not rated": t["pieces_not_rated"].astype(int), "Actual picking min (rated)": t["minutes_rated"],
-        "Actual sec/item": t["sec_per_item"], "Recorded average sec/item": t["benchmark_sec"],
-        "Difference (sec/item, + = slower)": t["difference_sec"], "Efficiency": t["efficiency"],
+        "Actual sec/item": t["sec_per_item"], "Recorded average sec/item (reference)": t["benchmark_sec"],
+        "Difference vs study (sec/item, + = slower)": t["difference_sec"], "Efficiency": t["efficiency"],
         "Above / below average": t["verdict"], "Lists flagged": t["lists_flagged"].astype(int), "Notes": t["Notes"],
     })
     st.dataframe(
-        show.style.format({"Actual picking min (rated)": "{:,.0f}", "Actual sec/item": "{:.2f}", "Recorded average sec/item": "{:.2f}",
-                           "Difference (sec/item, + = slower)": "{:+.2f}", "Efficiency": "{:.1%}", "Pieces picked (all)": "{:,}",
+        show.style.format({"Actual picking min (rated)": "{:,.0f}", "Actual sec/item": "{:.2f}", "Recorded average sec/item (reference)": "{:.2f}",
+                           "Difference vs study (sec/item, + = slower)": "{:+.2f}", "Efficiency": "{:.1%}", "Pieces picked (all)": "{:,}",
                            "Pieces rated": "{:,}", "Pieces not rated": "{:,}"}, na_rep="-")
         .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and v < 5 and v > 0 else "", subset=["Efficiency"]),
         width="stretch")
@@ -262,8 +284,8 @@ with tab_f:
 with tab_how:
     st.markdown(f"""
 ### What this answers
-How fast does each executive actually pick, compared with the average recorded in the time study
-(**{config.STUDY_PICKING_SEC_PER_ITEM} sec/item**)? 100% = exactly at the average, above = faster, below = slower.
+How fast does each executive actually pick, compared with the time a list of that size should take? 100% = exactly at the standard, above = faster, below = slower.
+{"The standard allows for **pieces and distinct SKUs**: a list's time is mostly walking to each SKU (about " + f"{S.c_sku * S.k:.0f}" + " s per SKU) plus a little per piece (about " + f"{S.b_piece * S.k:.1f}" + " s). So a morning list with many pieces per SKU and an evening list with few are both judged fairly." if S.model == 2 else "The standard is the time-study average of **" + f"{config.STUDY_PICKING_SEC_PER_ITEM}" + " sec/item** (pieces only)."}
 
 ### Words used
 - **Make list** - a set of drugs to pick (at most {S.max_codes} different drug codes). Lines of one login created within {S.merge_seconds:g} seconds are one list.
@@ -277,8 +299,9 @@ How fast does each executive actually pick, compared with the average recorded i
   flagged, and timed from the first scan plus the lead-in allowance, so the executive is not charged for time the data cannot explain.
 
 ### How efficiency is calculated
-For one executive and one period, add up rated pieces and rated minutes, then divide once:
-`sec/item = minutes x 60 / pieces`, `efficiency = benchmark sec/item / sec/item`.
+For one executive and one period, add up the standard minutes and the actual minutes of the rated lists, then divide once:
+`efficiency = standard minutes / actual minutes`. Standard seconds for a list = **scale x ({S.b_piece:g} x pieces + {S.c_sku:g} x distinct SKUs picked)** (scale {S.k:.2f}; 1.00 = typical actual pace)
+in the pieces + SKUs model, or pieces x {S.bench:.2f} in the old model.
 It is **not** an average of per-list percentages, so bigger lists count for more.
 
 ### Not used

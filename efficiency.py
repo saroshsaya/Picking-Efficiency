@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+import config
 from config import LOGIN_NAMES
 
 
@@ -40,10 +41,36 @@ class Settings:
     low_sample: int = 150              # grey out cells with fewer rated pieces
     max_codes: int = 48                # max distinct drug codes per make list
     merge_seconds: float = 2.0         # lines this close = same make list
+    model: int = 2                     # 1 = seconds per piece only (old), 2 = pieces + distinct SKUs
+    b_piece: float = config.PICK_STD_B_PIECE   # model 2: seconds per piece
+    c_sku: float = config.PICK_STD_C_SKU       # model 2: seconds per distinct SKU
+    level_mode: str = "typical"        # model 2 scale: "typical" = team about 100%, "study" = time-study pace
+    level: float = 0.0                 # model 2: an explicit scale (> 0) overrides level_mode
 
     @property
     def bench(self) -> float:
         return self.benchmark_sec * (1 + self.allowance)
+
+    @property
+    def k(self) -> float:
+        """Scale of the model-2 standard: typical actual pace (team about 100%) or the time-study pace."""
+        if self.level > 0:
+            return self.level
+        if self.level_mode == "study":
+            return level_from_study(self.b_piece, self.c_sku)
+        return config.PICK_LEVEL_TYPICAL
+
+    def std_seconds(self, pieces, skus):
+        """Standard seconds for a list. Model 1: pieces x recorded rate. Model 2: k x (b x pieces + c x SKUs)."""
+        if self.model == 1:
+            return pieces * self.bench
+        return self.k * (self.b_piece * pieces + self.c_sku * skus) * (1 + self.allowance)
+
+
+def level_from_study(b: float, c: float) -> float:
+    """Scale k so the standard reproduces the time study: the 20 study lists (3,851 items, 48 SKUs each) took 307 minutes."""
+    shape = b * config.PICK_STUDY_ITEMS + c * config.PICK_STUDY_SKUS_PER_LIST * config.PICK_STUDY_LISTS
+    return config.PICK_STUDY_SECONDS / shape
 
 
 def exec_name(login: str) -> str:
@@ -73,6 +100,9 @@ def build_lists(lines: pd.DataFrame, merge_seconds: float = 2.0):
         last=("updated_at", "max"),
         distinct_codes=("drug_code", "nunique"),
     ).reset_index()
+    picked_codes = d[d["updated_at"].notna()].groupby("_grp")["drug_code"].nunique().rename("picked_distinct")
+    lists = lists.merge(picked_codes, left_on="_grp", right_index=True, how="left")
+    lists["picked_distinct"] = lists["picked_distinct"].fillna(0).astype(int)
     lists = lists.sort_values(["start", "picker"]).reset_index(drop=True)
     lists["ml_id"] = ["ML%05d" % (i + 1) for i in range(len(lists))]
     d = d.merge(lists[["_grp", "ml_id"]], on="_grp", how="left").drop(columns="_grp")
@@ -125,7 +155,7 @@ def rate_lists(lists: pd.DataFrame, s: Settings) -> pd.DataFrame:
     d["date"] = d["start"].dt.normalize()
     d["week"] = d["date"] - pd.to_timedelta(d["date"].dt.weekday, unit="D")
     d["month"] = d["date"].dt.to_period("M").dt.to_timestamp()
-    d["bench_minutes"] = d["pieces"] * s.bench / 60
+    d["bench_minutes"] = s.std_seconds(d["pieces"], d["picked_distinct"]) / 60
     d["rated_minutes"] = np.where(d["rated"], d["minutes"], 0.0)
     d["rated_bench_minutes"] = np.where(d["rated"], d["bench_minutes"], 0.0)
     d["rated_pieces"] = np.where(d["rated"], d["pieces"], 0)
@@ -219,3 +249,37 @@ def data_checks(lines: pd.DataFrame, lists_rated: pd.DataFrame) -> dict:
         out["subtraction_time equals updated_at (lines)"] = int((both & (lines["subtraction_time"] == lines["updated_at"])).sum())
         out["subtraction_time later than updated_at (lines)"] = int((both & (lines["subtraction_time"] > lines["updated_at"])).sum())
     return out
+
+
+def fit_shape(rated_lists: pd.DataFrame, within_person: bool = True):
+    """Fit seconds -> b x pieces + c x picked SKUs on rated lists.
+
+    within_person=True gives each executive their own base level, so b and c describe how a *list* changes the time
+    for the same person. (Fitting everyone together under-states b, because fast people tend to take the big morning
+    lists.) Both terms are kept non-negative.
+    Returns (b, c, n, r2, k_team) where k_team scales the standard so the team sits at 100% on these lists."""
+    r = rated_lists[rated_lists["rated"]]
+    if within_person and "exec" in r.columns:
+        counts = r["exec"].map(r["exec"].value_counts())
+        r = r[counts >= 3]
+    if len(r) < 30:
+        return None
+    y = (r["minutes"] * 60).to_numpy(float)
+    X = np.column_stack([r["pieces"].to_numpy(float), r["picked_distinct"].to_numpy(float)])
+    if within_person and "exec" in r.columns:
+        D = pd.get_dummies(r["exec"]).to_numpy(float)
+        full = np.column_stack([X, D])
+    else:
+        full = X
+    coef = np.linalg.lstsq(full, y, rcond=None)[0]
+    if (coef[:2] < 0).any():                       # keep both terms non-negative
+        j = int(np.argmax(coef[:2]))
+        Xj = np.column_stack([X[:, j], full[:, 2:]]) if full.shape[1] > 2 else X[:, [j]]
+        cj = np.linalg.lstsq(Xj, y, rcond=None)[0]
+        coef = np.zeros(full.shape[1]); coef[j] = cj[0]
+        if full.shape[1] > 2:
+            coef[2:] = cj[1:]
+    pred = full @ coef
+    r2 = 1 - ((y - pred) ** 2).sum() / ((y - y.mean()) ** 2).sum()
+    shape = X @ coef[:2]
+    return float(coef[0]), float(coef[1]), int(len(r)), float(r2), float(y.sum() / shape.sum())

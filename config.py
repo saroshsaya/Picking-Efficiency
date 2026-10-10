@@ -40,3 +40,14 @@ PACK_STUDY_SEC_PER_ITEM = 7.73          # 30 cycles, 613 items, 79 minutes - ref
 PACK_STD_A = 44.01                      # fixed seconds per order
 PACK_STD_B = 1.30                       # seconds per item
 PACK_STD_C = 11.67                      # seconds per distinct SKU
+
+
+# ---- Picking standard: time depends on distinct SKUs (walking to each slot) as well as pieces ----
+PICK_STD_B_PIECE = 1.78        # seconds per piece        (fitted on rated lists, within each person)
+PICK_STD_C_SKU = 23.62         # seconds per distinct SKU (walking to the slot, finding it, scanning it)
+PICK_LEVEL_TYPICAL = 0.93      # scale that puts the team at about 100% on the lists the standard was fitted on
+# The 20 picking study cycles took 307 minutes for 3,851 items; all lists have 48 SKUs (3 cycles left blank).
+PICK_STUDY_SECONDS = 307 * 60
+PICK_STUDY_ITEMS = 3851
+PICK_STUDY_LISTS = 20
+PICK_STUDY_SKUS_PER_LIST = 48

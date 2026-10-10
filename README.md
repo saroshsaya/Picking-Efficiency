@@ -15,7 +15,7 @@ Same logic as the Excel workbook (`Picking_Efficiency.xlsx`).
 | `db.py` | Database queries (picking lines; packing orders already joined to their item counts) and the CSV loader |
 | `ui_common.py` | Password gate and the efficiency colouring shared by both pages |
 | `config.py` | Names (login -> name), notes, time-study averages and the packing standard |
-| `tests/` | 23 tests on tiny synthetic data - run `python -m pytest tests` |
+| `tests/` | 29 tests on tiny synthetic data - run `python -m pytest tests` |
 | `.streamlit/secrets.toml.example` | Template for the credentials - copy and fill in, never commit the real one |
 
 ## How it reads the database (light on the DB)
@@ -31,6 +31,18 @@ Same logic as the Excel workbook (`Picking_Efficiency.xlsx`).
   CREATE INDEX CONCURRENTLY idx_areab_make_list_created_ms
     ON "master_areaB_way_status" (((NULLIF(make_list_created_at, 'NA'))::bigint));
   ```
+
+## The picking standard (pieces + distinct SKUs)
+A list's time is mostly walking to and picking from each SKU slot, and only a little per piece. So the standard is
+`scale x (1.78 x pieces + 23.62 x distinct SKUs picked)` seconds. The two numbers were fitted on ~1,150 rated lists **within each
+person** (everyone gets their own base level), because fast people tend to take the big morning lists and fitting everyone
+together would under-state the per-piece time.
+In the morning a list has about 6-8 pieces per SKU and in the evening about 4-5, so a flat seconds-per-piece rate flatters morning
+lists and penalises evening ones; the SKU term removes that bias (hour-to-hour variation in efficiency fell from 0.29 to 0.15).
+* **Scale** (Settings > Standard level): *Typical actual pace* (default, scale 0.93) puts the team as a whole near 100%, like Packing;
+  *Time-study pace* is stricter and reproduces your 20 recorded study lists, so everyone sits well below 100%.
+* **Standard model > Pieces only (old)** switches back to the flat recorded rate.
+* The Settings panel shows what the loaded period would fit to, so you can see when the numbers need refreshing.
 
 ## Packing and the database
 * Packing reads `past_orders` for orders whose **TGS** (Advance clicked) falls in the chosen period and joins each one to its

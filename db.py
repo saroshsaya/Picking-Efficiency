@@ -93,6 +93,22 @@ ORDER BY j.id;
 # Orders whose phone number + order_id match more than one saya_orders row get no item counts (NULL).
 
 
+CHECK_QUERY = """
+SELECT
+    drug_code,
+    "type",
+    cub_rack,
+    CASE WHEN qty_checked::text ~ '^[0-9]+(\\.[0-9]+)?$' THEN qty_checked::text::numeric END AS qty_checked,
+    checked_by,
+    to_timestamp(NULLIF("created_at"::text, 'NA')::bigint / 1000) AT TIME ZONE 'Asia/Kolkata' AS created_at,
+    to_timestamp(NULLIF("time"::text, 'NA')::bigint / 1000)       AT TIME ZONE 'Asia/Kolkata' AS "time"
+FROM "checking_history"
+WHERE NULLIF("created_at"::text, 'NA')::bigint >= %(start_ms)s
+  AND NULLIF("created_at"::text, 'NA')::bigint <  %(end_ms)s
+ORDER BY NULLIF("created_at"::text, 'NA')::bigint;
+"""
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -140,6 +156,16 @@ def fetch_packing(start_ms: int, end_ms: int) -> pd.DataFrame:
     df = _fetch(PACK_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)})
     for c in ["TGR", "check_start", "TGS", "label_time"]:
         df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=900, max_entries=30, show_spinner="Reading the selected dates from the database...")
+def fetch_checking(start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Checking: only tasks started (created_at) inside the window are read. Cached per window for 15 minutes."""
+    df = _fetch(CHECK_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)})
+    for c in ["created_at", "time"]:
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    df["qty_checked"] = pd.to_numeric(df["qty_checked"], errors="coerce")
     return df
 
 

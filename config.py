@@ -51,3 +51,10 @@ PICK_STUDY_SECONDS = 307 * 60
 PICK_STUDY_ITEMS = 3851
 PICK_STUDY_LISTS = 20
 PICK_STUDY_SKUS_PER_LIST = 48
+
+
+# ---- Checking (no time study: the standards come from past checks) ----
+CHECK_ID_STD_SEC = 29.78        # ID checking (ID_CUBICLE, ID_RACK): mean seconds of rated tasks
+CHECK_QTY_A = 30.87             # quantity checking (ST, LT): standard = a + b x LN(1 + quantity)
+CHECK_QTY_B = 11.79
+CHECK_MAX_SEC = 300             # tasks longer than 5 minutes are flagged and not rated

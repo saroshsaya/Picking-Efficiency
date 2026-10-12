@@ -12,7 +12,8 @@ if not password_ok():
     st.stop()
 
 pages = [st.Page("picking_page.py", title="Picking", icon="🧺", default=True),
-         st.Page("packing_page.py", title="Packing", icon="📦")]
+         st.Page("packing_page.py", title="Packing", icon="📦"),
+         st.Page("checking_page.py", title="Checking", icon="✅")]
 try:
     nav = st.navigation(pages, position="top")
 except TypeError:                      # older Streamlit: fall back to the sidebar

@@ -5,6 +5,7 @@ from the code. The query is read-only.
 """
 from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -125,6 +126,36 @@ ORDER BY NULLIF(created_at::text, 'NA')::bigint;
 # Same table and fields as extract_testing.py. `details` (JSON: SKU -> quantity) is counted in Python, exactly as that script does.
 
 
+INV_QUERY = """
+SELECT
+    drug_code,
+    checked_by,
+    to_timestamp(NULLIF(verify_start::text, 'NA')::bigint / 1000)  AT TIME ZONE 'Asia/Kolkata' AS verify_start,
+    to_timestamp(NULLIF(verify_finish::text, 'NA')::bigint / 1000) AT TIME ZONE 'Asia/Kolkata' AS verify_finish,
+    to_timestamp(NULLIF(checked_time::text, 'NA')::bigint / 1000)  AT TIME ZONE 'Asia/Kolkata' AS checked_time
+FROM "testing_details"
+WHERE NULLIF(verify_start::text, 'NA') IS NOT NULL
+  AND NULLIF(verify_start::text, 'NA')::bigint >= %(start_ms)s
+  AND NULLIF(verify_start::text, 'NA')::bigint <  %(end_ms)s
+ORDER BY NULLIF(verify_start::text, 'NA')::bigint;
+"""
+
+# Quantity from tbt_differences, matched afterwards on drug_code + the stamp that equals checked_time.
+# If the stamp is not epoch milliseconds the match finds nothing and quantity stays blank - ratings do not use it.
+TBT_QUERY = """
+SELECT
+    drug_code,
+    quantity_states AS quantity_stated,
+    q_found,
+    CASE WHEN "timestamp"::text ~ '^[0-9]+$'
+         THEN to_timestamp("timestamp"::text::bigint / 1000) AT TIME ZONE 'Asia/Kolkata' END AS tbt_time
+FROM "tbt_differences"
+WHERE "timestamp"::text ~ '^[0-9]+$'
+  AND "timestamp"::text::bigint >= %(start_ms)s
+  AND "timestamp"::text::bigint <  %(end_ms)s;
+"""
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -197,6 +228,27 @@ def fetch_samples(start_ms: int, end_ms: int) -> pd.DataFrame:
     for c in ["created_at", "shipping_time"]:
         df[c] = pd.to_datetime(df[c], errors="coerce")
     return df
+
+
+@st.cache_data(ttl=900, max_entries=30, show_spinner="Reading the selected dates from the database...")
+def fetch_inventory(start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Inventory: verifications started (verify_start) inside the window, with quantity found from tbt_differences."""
+    pad = 24 * 3600 * 1000   # the quantity row is stamped within seconds of checked_time; read a day either side to be safe
+    v = _fetch(INV_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)})
+    for c in ["verify_start", "verify_finish", "checked_time"]:
+        v[c] = pd.to_datetime(v[c], errors="coerce")
+    for c in ["quantity_stated", "q_found"]:
+        v[c] = np.nan
+    if v.empty:
+        return v
+    try:
+        q = _fetch(TBT_QUERY, {"start_ms": int(start_ms) - pad, "end_ms": int(end_ms) + pad})
+        q["tbt_time"] = pd.to_datetime(q["tbt_time"], errors="coerce")
+        q = q.dropna(subset=["tbt_time"]).drop_duplicates(["drug_code", "tbt_time"])
+        v = v.drop(columns=["quantity_stated", "q_found"]).merge(q, left_on=["drug_code", "checked_time"], right_on=["drug_code", "tbt_time"], how="left").drop(columns=["tbt_time"])
+    except Exception:
+        pass   # quantity is reference only; the ratings do not need it
+    return v
 
 
 def load_csv(file_or_path) -> pd.DataFrame:

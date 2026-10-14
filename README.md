@@ -11,10 +11,12 @@ Same logic as the Excel workbook (`Picking_Efficiency.xlsx`).
 | `picking_page.py` | The Picking screens (settings popover, period picker, tabs) |
 | `packing_page.py` | The Packing screens (same layout, plus a Bottlenecks tab) |
 | `checking_page.py` | The Checking screens (same layout) |
+| `inventory_page.py` | The Inventory (slot verification) screens (same layout) |
 | `sample_page.py` | The Sample creation screens (same layout, no Daily / Bottlenecks tabs: samples are few) |
 | `efficiency.py` | **Picking rules** - pure pandas, no Streamlit, no database |
 | `packing.py` | **Packing rules** - pure pandas, no Streamlit, no database |
 | `checking.py` | **Checking rules** - pure pandas, no Streamlit, no database |
+| `inventory.py` | **Inventory rules** - pure pandas, no Streamlit, no database |
 | `sample.py` | **Sample-creation rules** - pure pandas, no Streamlit, no database |
 | `db.py` | Database queries (picking lines; packing orders already joined to their item counts) and the CSV loader |
 | `ui_common.py` | Password gate and the efficiency colouring shared by both pages |
@@ -120,3 +122,13 @@ All thresholds are in the sidebar **Settings**; the **How it works** tab explain
   The Overview tab shows what the loaded period would fit to.
 * Rated = status past, packer on the team list, both stamps, same calendar day (switchable), items > 0. Logins in `SAMPLE_EXCLUDED_LOGINS` are not rated (tick the box in Settings to include them).
 * Suggested index for the backend team: `CREATE INDEX CONCURRENTLY idx_testing_sample_created_ms ON testing_sample (((NULLIF(created_at::text, 'NA'))::bigint));`
+
+## Inventory (slot verification)
+* Reads `testing_details` for verifications whose **verify_start** falls in the chosen period (only rows that have a `verify_start`; stamps exist since 18 Aug 2026), plus the quantity found from `tbt_differences`,
+  matched on `drug_code` and the stamp that equals `checked_time`. If the quantity cannot be matched it stays blank - the ratings do not use it.
+* **Time** = `checked_time` - `verify_start`. **Person** = `checked_by` (the same person verifies and checks).
+* **Standard** = one fixed 414.3 s per verification (`INV_STD_SEC` in `config.py`): the mean of same-day verifications up to a 30-minute cap (`INV_MAX_SEC`), so the team is near 100%.
+  Quantity found explains almost none of the time (R-squared about 0.06), so there is no quantity term; the Overview tab shows the current R-squared.
+* Longer-than-cap and overnight verifications are not rated and are listed on Review flags. People with fewer than 10 rated jobs show no percentage (Settings).
+* Names come from `LOGIN_NAMES` - note `deepak86650@gmail.com` is **Devendra**.
+* Suggested index for the backend team: `CREATE INDEX CONCURRENTLY idx_testing_details_verify_ms ON testing_details (((NULLIF(verify_start::text, 'NA'))::bigint));`

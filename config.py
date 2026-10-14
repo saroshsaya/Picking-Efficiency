@@ -68,3 +68,9 @@ SAMPLE_EXCLUDED_LOGINS = {
     "jatinsingh71105@gmail.com", "dmg@saya.net.in", "shivangi12.301@gmail.com",
     "dhruvg001@gmail.com", "shalinidhiman1999@gmail.com", "akashsinghy318@gmail.com",
 }
+
+
+# ---- Inventory (slot verification): standard = one fixed time per verification ----
+INV_STD_SEC = 414.3             # mean of same-day verifications up to the cap, so the team is near 100%
+INV_MAX_SEC = 1800              # verifications longer than 30 minutes are flagged and not rated
+# Quantity found does not explain the time (R-squared about 0.06), so no quantity term is used.

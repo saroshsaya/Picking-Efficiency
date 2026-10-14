@@ -30,6 +30,8 @@ with settings_pop:
     S.exclude_overnight = st.checkbox("Do not rate overnight verifications", value=True, key="iv_night")
     S.min_show = st.number_input("Min rated jobs to show an efficiency cell", value=10, step=1, min_value=0, key="iv_show",
                                  help="Fewer rated jobs than this show blank: too few to judge a person.")
+    S.min_show_period = st.number_input("Min rated jobs to show a week / month efficiency", value=5, step=1, min_value=0, key="iv_showp",
+                                        help="Weekly and Monthly tabs: fewer rated jobs than this show a dash.")
     S.low_sample = st.number_input("Low-sample marker: rated jobs below", value=10, step=1, min_value=0, key="iv_low",
                                    help="Cells built on fewer rated jobs than this appear in grey italics.")
     st.caption("Person = checked_by (the same person verifies and checks). Names come from config.py.")
@@ -103,6 +105,7 @@ if raw.empty:
     st.info(f"No verifications between {start:%d %b %Y} and {end:%d %b %Y}."); st.stop()
 
 rows = inv.rate_verifications(raw, S)
+_qn = raw["qty_note"].iloc[0] if "qty_note" in raw.columns and len(raw) else ""
 names = inv.checker_order(rows)
 st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by date verified) - {len(raw):,} verifications read. Weeks and months at the edges may be partial.")
 if not names:
@@ -130,12 +133,20 @@ with tab_ov:
     show = pd.DataFrame({
         "Jobs rated": ov["jobs_rated"].astype(int), "Actual sec/job": ov["sec_per_job"], "Median sec": ov["median_sec"],
         "Avg quantity found": ov["avg_qty"], "Efficiency": ov["efficiency"], "Above / below team": ov["verdict"], "Not rated": ov["not_rated"]})
-    st.dataframe(
-        show.style.format({"Actual sec/job": "{:.0f}", "Median sec": "{:.0f}", "Avg quantity found": "{:.0f}", "Efficiency": "{:.1%}", "Jobs rated": "{:,}"}, na_rep="-")
-        .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and 0 < v < 5 else "", subset=["Efficiency"]),
-        width="stretch")
-    st.caption(f"Efficiency is blank for people with fewer than {S.min_show} rated jobs. Not rated = overnight, over the cap, or a timestamp problem.")
+    show["Note"] = np.where(ov["jobs_rated"] == 0, "No rated jobs",
+                            np.where(ov["efficiency"].isna() & (ov.index != "All checkers"), f"Too few jobs (under {S.min_show}) - no efficiency shown", ""))
+    num = {"Actual sec/job": "{:.0f}", "Median sec": "{:.0f}", "Avg quantity found": "{:.0f}"}
+    disp = show.copy()
+    for c, fmt in num.items():
+        disp[c] = show[c].map(lambda v, fmt=fmt: "-" if pd.isna(v) else fmt.format(v))
+    disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
+    eff = show["Efficiency"]
+    st.dataframe(disp.style.apply(lambda col: [cell_color(v) if pd.notna(v) and 0 < v < 5 else "" for v in eff], subset=["Efficiency"]), width="stretch")
+    st.caption(f"A dash = fewer than {S.min_show} rated jobs (too few to judge a person) or none. Not rated = overnight, over the cap, or a timestamp problem.")
     st.download_button("Download table (CSV)", show.to_csv().encode(), "inventory_overview.csv", "text/csv", key="iv_dl_ov")
+    nq = int(rows["q_found"].notna().sum())
+    if nq < len(rows):
+        st.caption(f"Quantity found matched for {nq:,} of {len(rows):,} verifications" + (f" ({_qn})." if _qn else ".") + " It is reference only - ratings do not use it.")
     sug = inv.suggested_standard(rows); r2 = inv.quantity_r2(rows)
     bits = []
     if sug:
@@ -200,7 +211,7 @@ Duration = `checked_time` - `verify_start`. Rated = a checker, both stamps, end 
 
 ### The standard
 **{S.std_sec:g} seconds** ({S.std_sec / 60:.1f} min) per verification - the mean of rated same-day verifications, so the team sits near 100%.
-Quantity found (from `tbt_differences`, matched on drug code and the checked time) was tested and does not explain the time, so there is no quantity term. It is shown for reference.
+Quantity found (from `TBT_differences`, matched on drug code and the checked time) was tested and does not explain the time, so there is no quantity term. It is shown for reference.
 
 ### How efficiency is calculated
 Add the standard seconds and the actual seconds of a person's rated jobs, then divide once. People with fewer than {S.min_show} rated jobs show no percentage.

@@ -34,6 +34,8 @@ with settings_pop:
                                          help="Off = the logins listed in config.py (SAMPLE_EXCLUDED_LOGINS) are not rated, as in the Excel workbook.")
     S.min_show = st.number_input("Min rated samples to show an efficiency cell", value=0, step=1, min_value=0, key="sm_show",
                                  help="0 = show a percentage whenever there is any rated work.")
+    S.min_show_period = st.number_input("Min rated samples to show a week / month efficiency", value=3, step=1, min_value=0, key="sm_showp",
+                                        help="Weekly and Monthly tabs: fewer rated samples than this show a dash.")
     S.low_sample = st.number_input("Low-sample marker: rated samples below", value=5, step=1, min_value=0, key="sm_low",
                                    help="Cells built on fewer rated samples than this appear in grey italics.")
     st.caption("Duration = created_at to shipping_time. Person = the packer. Names come from config.py.")
@@ -136,10 +138,12 @@ with tab_ov:
         "Items rated": ov["items_rated"].astype(int), "Actual sec/item": ov["sec_per_item"],
         "Efficiency": ov["efficiency"], "Above / below team": ov["verdict"],
     })
-    st.dataframe(
-        show.style.format({"Avg minutes per sample": "{:.1f}", "Actual sec/item": "{:.1f}", "Efficiency": "{:.1%}", "Samples rated": "{:,}", "Items rated": "{:,}"}, na_rep="-")
-        .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and 0 < v < 5 else "", subset=["Efficiency"]),
-        width="stretch")
+    disp = show.copy()
+    for c, fmt in {"Avg minutes per sample": "{:.1f}", "Actual sec/item": "{:.1f}"}.items():
+        disp[c] = show[c].map(lambda v, fmt=fmt: "-" if pd.isna(v) else fmt.format(v))
+    disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
+    eff = show["Efficiency"]
+    st.dataframe(disp.style.apply(lambda col: [cell_color(v) if pd.notna(v) and 0 < v < 5 else "" for v in eff], subset=["Efficiency"]), width="stretch")
     st.download_button("Download table (CSV)", show.to_csv().encode(), "sample_creation_overview.csv", "text/csv", key="sm_dl_ov")
     st.markdown("**Standard minutes for sample sizes**")
     st.dataframe(sm.standard_samples(S).style.format({"Standard minutes": "{:.1f}"}), width="stretch", hide_index=True)

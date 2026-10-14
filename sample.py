@@ -29,7 +29,8 @@ class SampleSettings:
     b: float = config.SAMPLE_STD_B
     exclude_overnight: bool = True
     include_outside_team: bool = False
-    min_show: int = 0
+    min_show: int = 0           # per person on the Overview
+    min_show_period: int = 3    # per person per week / month (as in the workbook)
     low_sample: int = 5
 
 
@@ -86,13 +87,14 @@ def packer_order(d: pd.DataFrame) -> list[str]:
     return r.groupby("name").size().sort_values(ascending=False).index.tolist()
 
 
-def summarize(d: pd.DataFrame, s: SampleSettings, keys, apply_min_show: bool = True) -> pd.DataFrame:
+def summarize(d: pd.DataFrame, s: SampleSettings, keys, apply_min_show: bool = True, min_show: int | None = None) -> pd.DataFrame:
     keys = [keys] if isinstance(keys, str) else list(keys)
     g = d.assign(_all=1).groupby(keys if keys else ["_all"])
     t = g.agg(samples_all=("rated", "size"), samples_rated=("rated", "sum"), items_rated=("items_rated", "sum"),
               act_sec=("act_rated", "sum"), std_sec=("std_rated", "sum"))
     ok = (t["samples_rated"] > 0) & (t["act_sec"] > 0)
-    show = ok & ((t["samples_rated"] >= s.min_show) if apply_min_show else True)
+    ms = s.min_show if min_show is None else min_show
+    show = ok & ((t["samples_rated"] >= ms) if apply_min_show else True)
     t["min_per_sample"] = np.where(ok, t["act_sec"] / t["samples_rated"].where(ok, 1) / 60, np.nan)
     t["sec_per_item"] = np.where(ok & (t["items_rated"] > 0), t["act_sec"] / t["items_rated"].where(t["items_rated"] > 0, 1), np.nan)
     t["efficiency"] = np.where(show, t["std_sec"] / t["act_sec"].where(ok, 1), np.nan)
@@ -114,8 +116,9 @@ def period_matrices(d: pd.DataFrame, s: SampleSettings, period: str) -> dict:
     r = d[d["rated"]]
     names = packer_order(d)
     periods = sorted(r[period].dropna().unique())
-    by = summarize(r, s, ["name", period]); by_p = summarize(r, s, [period]); by_n = summarize(r, s, "name")
-    tot = summarize(r, s, []).iloc[0]
+    mp = s.min_show_period
+    by = summarize(r, s, ["name", period], min_show=mp); by_p = summarize(r, s, [period], min_show=mp); by_n = summarize(r, s, "name", min_show=mp)
+    tot = summarize(r, s, [], min_show=mp).iloc[0]
     out = {}
     for col in ["efficiency", "samples_rated", "min_per_sample"]:
         m = by[col].unstack(period).reindex(index=names, columns=periods)

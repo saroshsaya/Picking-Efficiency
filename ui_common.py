@@ -53,7 +53,9 @@ def style_eff(e: pd.DataFrame, p: pd.DataFrame, low: int):
                     css += "; color: #808080; font-style: italic"
                 out.at[i, c] = css
         return out
-    return e.style.apply(f, axis=None).format("{:.1%}", na_rep="-")
+    disp = e.apply(lambda col: col.map(lambda v: "-" if pd.isna(v) else f"{v:.1%}"))
+    css = f(e)
+    return disp.style.apply(lambda df: css.reindex(index=df.index, columns=df.columns), axis=None)
 
 
 def fmt_cols(df, **kw):

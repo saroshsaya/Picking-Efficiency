@@ -27,7 +27,8 @@ class InvSettings:
     std_sec: float = config.INV_STD_SEC
     max_sec: float = config.INV_MAX_SEC
     exclude_overnight: bool = True
-    min_show: int = 10
+    min_show: int = 10          # per person on the Overview
+    min_show_period: int = 5    # per person per week / month
     low_sample: int = 10
 
 
@@ -53,6 +54,7 @@ def rate_verifications(df: pd.DataFrame, s: InvSettings) -> pd.DataFrame:
     d["act_rated"] = np.where(d["rated"], d["dur"], 0.0)
     d["std_rated"] = np.where(d["rated"], d["std_sec"], 0.0)
     d["q_rated"] = np.where(d["rated"], d["q_found"].fillna(0), 0.0)
+    d["q_has"] = (d["rated"] & d["q_found"].notna()).astype(int)
     return d
 
 
@@ -60,14 +62,15 @@ def checker_order(d: pd.DataFrame) -> list[str]:
     return d[d["rated"]].groupby("name").size().sort_values(ascending=False).index.tolist()
 
 
-def summarize(d: pd.DataFrame, s: InvSettings, keys, apply_min_show: bool = True) -> pd.DataFrame:
+def summarize(d: pd.DataFrame, s: InvSettings, keys, apply_min_show: bool = True, min_show: int | None = None) -> pd.DataFrame:
     keys = [keys] if isinstance(keys, str) else list(keys)
     g = d.assign(_all=1).groupby(keys if keys else ["_all"])
-    t = g.agg(jobs_rated=("rated", "size"), act_sec=("act_rated", "sum"), std_sec=("std_rated", "sum"), q_sum=("q_rated", "sum"))
+    t = g.agg(jobs_rated=("rated", "size"), act_sec=("act_rated", "sum"), std_sec=("std_rated", "sum"), q_sum=("q_rated", "sum"), q_n=("q_has", "sum"))
     ok = (t["jobs_rated"] > 0) & (t["act_sec"] > 0)
-    show = ok & ((t["jobs_rated"] >= s.min_show) if apply_min_show else True)
+    ms = s.min_show if min_show is None else min_show
+    show = ok & ((t["jobs_rated"] >= ms) if apply_min_show else True)
     t["sec_per_job"] = np.where(ok, t["act_sec"] / t["jobs_rated"].where(ok, 1), np.nan)
-    t["avg_qty"] = np.where(ok, t["q_sum"] / t["jobs_rated"].where(ok, 1), np.nan)
+    t["avg_qty"] = np.where(ok & (t["q_n"] > 0), t["q_sum"] / t["q_n"].where(t["q_n"] > 0, 1), np.nan)
     t["efficiency"] = np.where(show, t["std_sec"] / t["act_sec"].where(ok, 1), np.nan)
     if not keys:
         t = t.reset_index(drop=True)
@@ -91,8 +94,9 @@ def period_matrices(d: pd.DataFrame, s: InvSettings, period: str) -> dict:
     r = d[d["rated"]]
     names = checker_order(d)
     periods = sorted(r[period].dropna().unique())
-    by = summarize(r, s, ["name", period]); by_p = summarize(r, s, [period]); by_n = summarize(r, s, "name")
-    tot = summarize(r, s, []).iloc[0]
+    mp = s.min_show_period
+    by = summarize(r, s, ["name", period], min_show=mp); by_p = summarize(r, s, [period], min_show=mp); by_n = summarize(r, s, "name", min_show=mp)
+    tot = summarize(r, s, [], min_show=mp).iloc[0]
     out = {}
     for col in ["efficiency", "jobs_rated", "sec_per_job"]:
         m = by[col].unstack(period).reindex(index=names, columns=periods)

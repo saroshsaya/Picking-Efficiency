@@ -10,12 +10,16 @@ Same logic as the Excel workbook (`Picking_Efficiency.xlsx`).
 | `app.py` | Entry point: page setup, optional password, and the Picking / Packing navigation |
 | `picking_page.py` | The Picking screens (settings popover, period picker, tabs) |
 | `packing_page.py` | The Packing screens (same layout, plus a Bottlenecks tab) |
+| `checking_page.py` | The Checking screens (same layout) |
+| `sample_page.py` | The Sample creation screens (same layout, no Daily / Bottlenecks tabs: samples are few) |
 | `efficiency.py` | **Picking rules** - pure pandas, no Streamlit, no database |
 | `packing.py` | **Packing rules** - pure pandas, no Streamlit, no database |
+| `checking.py` | **Checking rules** - pure pandas, no Streamlit, no database |
+| `sample.py` | **Sample-creation rules** - pure pandas, no Streamlit, no database |
 | `db.py` | Database queries (picking lines; packing orders already joined to their item counts) and the CSV loader |
 | `ui_common.py` | Password gate and the efficiency colouring shared by both pages |
 | `config.py` | Names (login -> name), notes, time-study averages and the packing standard |
-| `tests/` | 29 tests on tiny synthetic data - run `python -m pytest tests` |
+| `tests/` | tests on tiny synthetic data - run `python -m pytest tests` |
 | `.streamlit/secrets.toml.example` | Template for the credentials - copy and fill in, never commit the real one |
 
 ## How it reads the database (light on the DB)
@@ -55,6 +59,17 @@ lists and penalises evening ones; the SKU term removes that bias (hour-to-hour v
   CREATE INDEX CONCURRENTLY idx_saya_orders_phone_order ON saya_orders (phone_number, order_id);
   CREATE INDEX CONCURRENTLY idx_past_orders_tgs_ms ON past_orders (((NULLIF("TGS", 'NA'))::bigint));
   CREATE INDEX CONCURRENTLY idx_areab_make_list_created_ms ON "master_areaB_way_status" (((NULLIF(make_list_created_at, 'NA'))::bigint));
+  ```
+
+## Checking
+* Reads `checking_history` for tasks whose **created_at** (task started) falls in the chosen period; only those rows come back.
+* Two kinds of checking: **ID checking** (ID_CUBICLE, ID_RACK) is held to one standard time (29.8 s, the mean of rated ID checks);
+  **quantity checking** (ST, LT) to `30.87 + 11.79 x LN(1 + quantity)` seconds. There is no time study, so both come from past checks.
+* A task over 5 minutes is flagged and not rated; a task with a missing timestamp is not considered; a quantity check without a quantity has no standard.
+  The overall efficiency per checker adds both activities; their own columns show each separately.
+* Suggested index for the backend team:
+  ```sql
+  CREATE INDEX CONCURRENTLY idx_checking_history_created_ms ON checking_history (((NULLIF("created_at"::text, 'NA'))::bigint));
   ```
 
 ## Run it on your computer
@@ -97,3 +112,11 @@ All thresholds are in the sidebar **Settings**; the **How it works** tab explain
   flags three such lists).
 * Assembly is not measured: there are no usable assembly timestamps.
 * `subtraction_time` is read and checked but not used in the calculations.
+
+## Sample creation
+* Reads `testing_sample` (same fields as `extract_testing.py`) for samples **created** in the chosen period. The `details` JSON (SKU -> quantity) is counted in Python, as in that script.
+* **Time** = `shipping_time` - `created_at`. **Person** = the packer. **Size** = items only (no SKU count, no label time).
+* **Standard** = 3,057.96 s + 43.27 s per item (`SAMPLE_STD_A`, `SAMPLE_STD_B` in `config.py`), fitted on same-day past samples so the team is near 100%.
+  The Overview tab shows what the loaded period would fit to.
+* Rated = status past, packer on the team list, both stamps, same calendar day (switchable), items > 0. Logins in `SAMPLE_EXCLUDED_LOGINS` are not rated (tick the box in Settings to include them).
+* Suggested index for the backend team: `CREATE INDEX CONCURRENTLY idx_testing_sample_created_ms ON testing_sample (((NULLIF(created_at::text, 'NA'))::bigint));`

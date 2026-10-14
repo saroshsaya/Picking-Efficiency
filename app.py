@@ -1,4 +1,4 @@
-"""Efficiency dashboard: Picking and Packing in one app.
+"""Efficiency dashboard: Picking, Packing, Checking and Sample creation in one app.
 
 Run locally:   streamlit run app.py
 """
@@ -13,7 +13,8 @@ if not password_ok():
 
 pages = [st.Page("picking_page.py", title="Picking", icon="🧺", default=True),
          st.Page("packing_page.py", title="Packing", icon="📦"),
-         st.Page("checking_page.py", title="Checking", icon="✅")]
+         st.Page("checking_page.py", title="Checking", icon="✅"),
+         st.Page("sample_page.py", title="Sample creation", icon="🧪")]
 try:
     nav = st.navigation(pages, position="top")
 except TypeError:                      # older Streamlit: fall back to the sidebar

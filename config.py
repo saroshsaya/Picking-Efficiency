@@ -58,3 +58,13 @@ CHECK_ID_STD_SEC = 29.78        # ID checking (ID_CUBICLE, ID_RACK): mean second
 CHECK_QTY_A = 30.87             # quantity checking (ST, LT): standard = a + b x LN(1 + quantity)
 CHECK_QTY_B = 11.79
 CHECK_MAX_SEC = 300             # tasks longer than 5 minutes are flagged and not rated
+
+
+# ---- Sample creation (fitted on same-day samples; created_at -> shipping_time, packer, items only) ----
+SAMPLE_STD_A = 3057.96          # fixed seconds per sample
+SAMPLE_STD_B = 43.27            # seconds per item (every item is blacked out by hand; SKU count is not used)
+# Logins that appear as packers in testing_sample but are not rated (left out of the earlier workbook too).
+SAMPLE_EXCLUDED_LOGINS = {
+    "jatinsingh71105@gmail.com", "dmg@saya.net.in", "shivangi12.301@gmail.com",
+    "dhruvg001@gmail.com", "shalinidhiman1999@gmail.com", "akashsinghy318@gmail.com",
+}

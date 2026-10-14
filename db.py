@@ -109,6 +109,22 @@ ORDER BY NULLIF("created_at"::text, 'NA')::bigint;
 """
 
 
+SAMPLE_QUERY = """
+SELECT
+    assembler,
+    packer,
+    details,
+    status,
+    to_timestamp(NULLIF(created_at::text, 'NA')::bigint / 1000)     AT TIME ZONE 'Asia/Kolkata' AS created_at,
+    to_timestamp(NULLIF(shipping_time::text, 'NA')::bigint / 1000)  AT TIME ZONE 'Asia/Kolkata' AS shipping_time
+FROM "testing_sample"
+WHERE NULLIF(created_at::text, 'NA')::bigint >= %(start_ms)s
+  AND NULLIF(created_at::text, 'NA')::bigint <  %(end_ms)s
+ORDER BY NULLIF(created_at::text, 'NA')::bigint;
+"""
+# Same table and fields as extract_testing.py. `details` (JSON: SKU -> quantity) is counted in Python, exactly as that script does.
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -166,6 +182,20 @@ def fetch_checking(start_ms: int, end_ms: int) -> pd.DataFrame:
     for c in ["created_at", "time"]:
         df[c] = pd.to_datetime(df[c], errors="coerce")
     df["qty_checked"] = pd.to_numeric(df["qty_checked"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=900, max_entries=30, show_spinner="Reading the selected dates from the database...")
+def fetch_samples(start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Sample creation: only samples created inside the window are read. Cached per window for 15 minutes."""
+    from sample import count_details
+    df = _fetch(SAMPLE_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)})
+    counts = df["details"].map(count_details)
+    df["distinct_skus"] = counts.map(lambda t: t[0])
+    df["total_items"] = counts.map(lambda t: t[1])
+    df = df.drop(columns=["details"])
+    for c in ["created_at", "shipping_time"]:
+        df[c] = pd.to_datetime(df[c], errors="coerce")
     return df
 
 

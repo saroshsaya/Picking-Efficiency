@@ -149,7 +149,7 @@ SELECT
     q_found,
     CASE WHEN "timestamp"::text ~ '^[0-9]+$'
          THEN to_timestamp("timestamp"::text::bigint / 1000) AT TIME ZONE 'Asia/Kolkata' END AS tbt_time
-FROM "tbt_differences"
+FROM "TBT_differences"
 WHERE "timestamp"::text ~ '^[0-9]+$'
   AND "timestamp"::text::bigint >= %(start_ms)s
   AND "timestamp"::text::bigint <  %(end_ms)s;
@@ -239,15 +239,20 @@ def fetch_inventory(start_ms: int, end_ms: int) -> pd.DataFrame:
         v[c] = pd.to_datetime(v[c], errors="coerce")
     for c in ["quantity_stated", "q_found"]:
         v[c] = np.nan
+    v["qty_note"] = ""
     if v.empty:
         return v
     try:
         q = _fetch(TBT_QUERY, {"start_ms": int(start_ms) - pad, "end_ms": int(end_ms) + pad})
         q["tbt_time"] = pd.to_datetime(q["tbt_time"], errors="coerce")
-        q = q.dropna(subset=["tbt_time"]).drop_duplicates(["drug_code", "tbt_time"])
-        v = v.drop(columns=["quantity_stated", "q_found"]).merge(q, left_on=["drug_code", "checked_time"], right_on=["drug_code", "tbt_time"], how="left").drop(columns=["tbt_time"])
-    except Exception:
-        pass   # quantity is reference only; the ratings do not need it
+        q = q.dropna(subset=["tbt_time"]).sort_values("tbt_time").drop_duplicates(["drug_code", "tbt_time"])
+        v = v.drop(columns=["quantity_stated", "q_found"]).sort_values("checked_time")
+        # exact stamp match, with a 3 second tolerance in case the two tables round the stamp differently
+        v = pd.merge_asof(v, q, left_on="checked_time", right_on="tbt_time", by="drug_code",
+                          tolerance=pd.Timedelta("3s"), direction="nearest").drop(columns=["tbt_time"]).sort_values("verify_start").reset_index(drop=True)
+        v["qty_note"] = "" if v["q_found"].notna().any() else "no matching rows in tbt_differences"
+    except Exception as e:
+        v["qty_note"] = f"quantity not read ({type(e).__name__})"   # quantity is reference only; ratings do not need it
     return v
 
 

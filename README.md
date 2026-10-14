@@ -124,7 +124,7 @@ All thresholds are in the sidebar **Settings**; the **How it works** tab explain
 * Suggested index for the backend team: `CREATE INDEX CONCURRENTLY idx_testing_sample_created_ms ON testing_sample (((NULLIF(created_at::text, 'NA'))::bigint));`
 
 ## Inventory (slot verification)
-* Reads `testing_details` for verifications whose **verify_start** falls in the chosen period (only rows that have a `verify_start`; stamps exist since 18 Aug 2026), plus the quantity found from `tbt_differences`,
+* Reads `testing_details` for verifications whose **verify_start** falls in the chosen period (only rows that have a `verify_start`; stamps exist since 18 Aug 2026), plus the quantity found from `TBT_differences`,
   matched on `drug_code` and the stamp that equals `checked_time`. If the quantity cannot be matched it stays blank - the ratings do not use it.
 * **Time** = `checked_time` - `verify_start`. **Person** = `checked_by` (the same person verifies and checks).
 * **Standard** = one fixed 414.3 s per verification (`INV_STD_SEC` in `config.py`): the mean of same-day verifications up to a 30-minute cap (`INV_MAX_SEC`), so the team is near 100%.
@@ -132,3 +132,18 @@ All thresholds are in the sidebar **Settings**; the **How it works** tab explain
 * Longer-than-cap and overnight verifications are not rated and are listed on Review flags. People with fewer than 10 rated jobs show no percentage (Settings).
 * Names come from `LOGIN_NAMES` - note `deepak86650@gmail.com` is **Devendra**.
 * Suggested index for the backend team: `CREATE INDEX CONCURRENTLY idx_testing_details_verify_ms ON testing_details (((NULLIF(verify_start::text, 'NA'))::bigint));`
+
+## RTO (returned parcels)
+One process, shown as one result; behind the scenes it is two phases (same rules and numbers as `RTO_Efficiency_v3.xlsx`).
+* **Phase 1 - carton sorting.** Reads `return_shipment_tracking` for parcels whose **carton_added_at** falls in the chosen period (only those rows come back). Time = gap since the same person's previous `carton_added_at` (person = `carton_added_by`); a gap over 300 s is a break and is not rated. Standard = 10.6 s per parcel.
+* **Phase 2 - trolley transfer + merge to base, one job per carton.** Reads the whole `return_shipment_tracking_audit` table (a few hundred sessions; it is cut to the period in Python). A job starts at the Trolley Transfer session start and ends at `ended_at` of the Merge session that follows for the same person and carton; only sessions that ended `auto_drained` are used (reset / superseded sessions hold no items).
+  Parcels = the trolley session's `item_count`; drug codes and units come from the Merge session's `item_details` (distinct drug codes, sum of quantity).
+  Standard = transfer (-23.76 + 103.91 x parcels + 2.19 x units) + merge (131.57 + 13.71 x drug codes + 1.62 x units) seconds - fitted on rated jobs so the team is near 100% (`RTO_*` in `config.py`; the Overview tab shows what the loaded period would fit to).
+  A job that took more than 2.5 x its own standard, or more than 4 hours, is a break or operational problem and is not rated (about 97% of jobs and gaps are rated).
+* **Combined result** = (Phase 1 + Phase 2 standard seconds) / (Phase 1 + Phase 2 actual seconds). Phase 1 is counted from `RTO_COMBINED_FROM` (3 Sep 2026, the first day with Phase 2 data) so both phases cover the same days. Tabs: Overview, Daily, Weekly, Monthly, Review flags, How it works.
+* **Anurag** (`ay9936370@gmail.com`) only scans parcels in and is not rated, with `admin` and `lakshya@sayacare.in` (`RTO_EXCLUDED_LOGINS` in `config.py`).
+* The audit table's timestamps may be epoch milliseconds or real timestamps, and `item_details` may be a list of objects or an object keyed by drug code - `rto.normalize_audit` handles both. If the table cannot be read, the page still shows Phase 1 and says so.
+* Suggested indexes for the backend team:
+  ```sql
+  CREATE INDEX CONCURRENTLY idx_rst_carton_added_ms ON return_shipment_tracking (((NULLIF(carton_added_at::text, 'NA'))::bigint));
+  ```

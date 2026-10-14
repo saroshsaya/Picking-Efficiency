@@ -20,6 +20,7 @@ LOGIN_NAMES = {
     "naduraj4848@gmail.com": "Nandu",
     "nanduraj4848@gmail.com": "Nandu",      # second login, assumed to be the same person
     "dmg@saya.net.in": "Dhruv",
+    "ay9936370@gmail.com": "Anurag",         # scans RTO parcels in; not rated
 }
 
 # Notes shown next to an executive on the overview table
@@ -74,3 +75,20 @@ SAMPLE_EXCLUDED_LOGINS = {
 INV_STD_SEC = 414.3             # mean of same-day verifications up to the cap, so the team is near 100%
 INV_MAX_SEC = 1800              # verifications longer than 30 minutes are flagged and not rated
 # Quantity found does not explain the time (R-squared about 0.06), so no quantity term is used.
+
+
+# ---- RTO (returned parcels): Phase 1 carton sorting + Phase 2 trolley transfer & merge to base, shown as one result ----
+RTO_P1_STD_SEC = 10.6           # Phase 1: seconds per parcel (gap since the same person's previous carton_added_at)
+RTO_P1_CAP_SEC = 300            # a longer gap is a break / stop and is not rated (keeps about 97% of gaps)
+# Phase 2 job = one carton: first parcel scan in Trolley Transfer -> ended_at of its Merge session (auto_drained sessions only)
+RTO_T_FIXED = -23.76            # transfer part (job start -> merge start): fixed + per parcel x parcels + per unit x units
+RTO_T_PARCEL = 103.91
+RTO_T_UNIT = 2.19
+RTO_M_FIXED = 131.57            # merge part (merge start -> merge end): fixed + per drug code x drug codes + per unit x units
+RTO_M_DRUG = 13.71
+RTO_M_UNIT = 1.62
+RTO_MAX_RATIO = 2.5             # a job that took more than this many times its own standard is not rated (break / operational problem)
+RTO_HARD_CAP_SEC = 14400        # no job longer than 4 hours is rated
+RTO_COMBINED_FROM = "2026-09-03"   # first day with Phase 2 data; the combined result counts Phase 1 from here
+RTO_EXCLUDED_LOGINS = {"ay9936370@gmail.com",     # Anurag: only scans parcels in
+                       "admin", "lakshya@sayacare.in"}

@@ -156,6 +156,37 @@ WHERE "timestamp"::text ~ '^[0-9]+$'
 """
 
 
+RTO_SORT_QUERY = """
+SELECT
+    order_id,
+    carton_added_by,
+    to_timestamp(NULLIF(carton_added_at::text, 'NA')::bigint / 1000) AT TIME ZONE 'Asia/Kolkata' AS carton_added_at
+FROM "return_shipment_tracking"
+WHERE NULLIF(carton_added_at::text, 'NA') IS NOT NULL
+  AND NULLIF(carton_added_at::text, 'NA')::bigint >= %(start_ms)s
+  AND NULLIF(carton_added_at::text, 'NA')::bigint <  %(end_ms)s
+ORDER BY NULLIF(carton_added_at::text, 'NA')::bigint;
+"""
+# Phase 1 (carton sorting): the same table and fields as extract_rto.py, only parcels sorted inside the window.
+
+RTO_AUDIT_QUERY = """
+SELECT
+    id,
+    workflow_step,
+    performed_by,
+    carton_number,
+    item_count,
+    to_timestamp(NULLIF(started_at::text, 'NA')::bigint / 1000)       AT TIME ZONE 'Asia/Kolkata' AS started_at,
+    to_timestamp(NULLIF(last_activity_at::text, 'NA')::bigint / 1000) AT TIME ZONE 'Asia/Kolkata' AS last_activity_at,
+    to_timestamp(NULLIF(ended_at::text, 'NA')::bigint / 1000)         AT TIME ZONE 'Asia/Kolkata' AS ended_at,
+    end_reason,
+    item_details
+FROM "return_shipment_tracking_audit";
+"""
+# Phase 2 (trolley transfer + merge): same table and fields as extract_rto2.py. The audit table is small (a few hundred sessions),
+# so it is read whole and cut to the period in Python; item_details (JSON list of {at, batch, quantity, drug_code}) is read in rto.normalize_audit.
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -254,6 +285,22 @@ def fetch_inventory(start_ms: int, end_ms: int) -> pd.DataFrame:
     except Exception as e:
         v["qty_note"] = f"quantity not read ({type(e).__name__})"   # quantity is reference only; ratings do not need it
     return v
+
+
+@st.cache_data(ttl=900, max_entries=30, show_spinner="Reading the selected dates from the database...")
+def fetch_rto_sort(start_ms: int, end_ms: int) -> pd.DataFrame:
+    """RTO Phase 1: parcels sorted into cartons (carton_added_at) inside the window."""
+    df = _fetch(RTO_SORT_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)})
+    df["carton_added_at"] = pd.to_datetime(df["carton_added_at"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=900, max_entries=4, show_spinner="Reading the RTO audit table from the database...")
+def fetch_rto_audit():
+    """RTO Phase 2: every audit session (trolley transfer / merge) and its merged items, normalised."""
+    import rto
+    raw = _fetch(RTO_AUDIT_QUERY, {})
+    return rto.normalize_audit(raw)
 
 
 def load_csv(file_or_path) -> pd.DataFrame:

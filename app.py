@@ -1,4 +1,4 @@
-"""Efficiency dashboard: Picking, Packing, Checking, Sample creation and Inventory in one app.
+"""Efficiency dashboard: Picking, Packing, Checking, Sample creation, Inventory and RTO in one app.
 
 Run locally:   streamlit run app.py
 """
@@ -15,7 +15,8 @@ pages = [st.Page("picking_page.py", title="Picking", icon="🧺", default=True),
          st.Page("packing_page.py", title="Packing", icon="📦"),
          st.Page("checking_page.py", title="Checking", icon="✅"),
          st.Page("sample_page.py", title="Sample creation", icon="🧪"),
-         st.Page("inventory_page.py", title="Inventory", icon="🗄️")]
+         st.Page("inventory_page.py", title="Inventory", icon="🗄️"),
+         st.Page("rto_page.py", title="RTO", icon="↩️")]
 try:
     nav = st.navigation(pages, position="top")
 except TypeError:                      # older Streamlit: fall back to the sidebar

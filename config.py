@@ -92,3 +92,21 @@ RTO_HARD_CAP_SEC = 14400        # no job longer than 4 hours is rated
 RTO_COMBINED_FROM = "2026-09-03"   # first day with Phase 2 data; the combined result counts Phase 1 from here
 RTO_EXCLUDED_LOGINS = {"ay9936370@gmail.com",     # Anurag: only scans parcels in
                        "admin", "lakshya@sayacare.in"}
+
+
+# ---- DTO (customer returns sent back by courier): Start Return Processing (spt) -> Return Handled (trh) ----
+# From the DTO time study (Time_Study_DTO.xlsx): 17 DTOs timed on 17-22 Oct 2026 (Akash and Sunny), average Start to End.
+# The average includes the one DTO with an issue (photos added) and the slowest one, so it leaves some leeway on purpose:
+# a trouble-free DTO shows as efficient, a DTO with an issue costs little. Adding photos is part of the DTO process: no extra allowance.
+DTO_STD_SEC = 147               # one flat standard per DTO (item counts per DTO are not in the table yet)
+DTO_MIN_SEC = 10                # a shorter Start to End is the same moment: not rated
+DTO_MAX_SEC = 1800              # a longer one means a missed start/end or a break: not rated (longest in the study: 7 minutes)
+DTO_SLOW_X = 3                  # rated DTOs slower than this many times the standard are listed on Review flags
+# Logins that accept DTOs but are not in LOGIN_NAMES above (names as in DTO_Efficiency.xlsx)
+DTO_LOGIN_NAMES = {
+    "shivangi12.301@gmail.com": "Shivangi",
+    "kaushikabhishek2001@gmail.com": "Abhishek",
+    "tishagupta2025@gmail.com": "Tisha",
+    "anaschoudhary200084@gmail.com": "Anas",
+    "ashutosh220798@gmail.com": "Ashutosh",
+}

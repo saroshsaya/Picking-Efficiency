@@ -187,6 +187,16 @@ FROM "return_shipment_tracking_audit";
 # so it is read whole and cut to the period in Python; item_details (JSON list of {at, batch, quantity, drug_code}) is read in rto.normalize_audit.
 
 
+# DTO (customer returns): the table is small (about a hundred DTOs a month), so it is read whole and cut to the period in Python.
+# Only five columns come back - no phone numbers and no order ids. The stored times are a mix of epoch milliseconds
+# (13 digits, older module) and epoch seconds (10 digits, newer module), so they are read as text and converted by length in dto.epoch_to_ist.
+DTO_QUERY = """
+SELECT awb::text AS awb, accepted_by::text AS accepted_by,
+       accepted_at::text AS accepted_at, spt::text AS spt, trh::text AS trh
+FROM "dto_shipment_tracking";
+"""
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -301,6 +311,13 @@ def fetch_rto_audit():
     import rto
     raw = _fetch(RTO_AUDIT_QUERY, {})
     return rto.normalize_audit(raw)
+
+
+@st.cache_data(ttl=900, max_entries=2, show_spinner="Reading the DTO table from the database...")
+def fetch_dto() -> pd.DataFrame:
+    """DTO: every row of dto_shipment_tracking (five columns), times converted to IST. Cached for 15 minutes."""
+    import dto
+    return dto.prepare(_fetch(DTO_QUERY, {}))
 
 
 def load_csv(file_or_path) -> pd.DataFrame:

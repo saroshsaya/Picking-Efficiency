@@ -189,7 +189,8 @@ def summarize(d: pd.DataFrame, s: Settings, keys) -> pd.DataFrame:
 def exec_order(d: pd.DataFrame) -> list[str]:
     """Executives with picked work, in the order of config.LOGIN_NAMES, then others."""
     present = set(d.loc[d["picked"], "exec"])
-    ordered = [n for n in LOGIN_NAMES.values() if n in present]
+    # one name can have two logins (Nandu): list each name once, or the tables get a repeated row
+    ordered = [n for n in dict.fromkeys(LOGIN_NAMES.values()) if n in present]
     return ordered + sorted(present - set(ordered))
 
 

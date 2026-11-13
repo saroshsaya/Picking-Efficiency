@@ -110,3 +110,15 @@ DTO_LOGIN_NAMES = {
     "anaschoudhary200084@gmail.com": "Anas",
     "ashutosh220798@gmail.com": "Ashutosh",
 }
+
+
+# ---- Move (stock moved from an LT rack to an ST cubicle): MOVE pressed (move_start) -> SUBMIT pressed (move_time) ----
+# Standard seconds for one move = MOVE_STD_FIXED + MOVE_STD_PER_UNIT x units moved (units = cumulative_change).
+# Fixed + per-unit seconds come from the move time study (Time_Study_Move.xlsx).
+MOVE_STD_FIXED = 180.0          # seconds every move needs (time study: 24 move sessions, 37 moves, ~180 s of working time per move)
+MOVE_STD_PER_UNIT = 0.0         # quantity did not change the time in the study (R2 0.017), so the standard is flat
+MOVE_MIN_SEC = 2                # a shorter MOVE-to-SUBMIT is the same moment (stamped together): not rated
+MOVE_MAX_SEC = 1800             # a longer one is a break or a start left open: not rated
+MOVE_SLOW_X = 3                 # rated moves slower than this many times their standard are listed on Review flags
+MOVE_START_FROM = "12 Nov 2026" # the first day the start stamp (move_start) exists; earlier moves cannot be timed
+MOVE_EXCLUDED_LOGINS = set()    # logins whose moves are left out, e.g. {"someone@example.com"}

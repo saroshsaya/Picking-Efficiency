@@ -197,6 +197,28 @@ FROM "dto_shipment_tracking";
 """
 
 
+# Move (LT -> ST): moves submitted (move_time) inside the window. The stamps are read as text and converted in Python by length
+# (13 digits = milliseconds, 10 digits = seconds) in move.prepare; only the window filter below reads the number, and the CASE keeps
+# 'NA' / empty values from ever being cast. past_moves is small (about a thousand moves a month).
+MOVE_QUERY = """
+WITH m AS (
+    SELECT moved_by::text AS moved_by, "DC"::text AS "DC", cumulative_change::text AS cumulative_change,
+           NULLIF(TRIM(move_time::text), '')  AS move_time,
+           NULLIF(TRIM(move_start::text), '') AS move_start
+    FROM "past_moves"
+), n AS (
+    SELECT m.*,
+           CASE WHEN move_time ~ '^[0-9]{13}$' THEN move_time::bigint
+                WHEN move_time ~ '^[0-9]{10}$' THEN move_time::bigint * 1000 END AS ms
+    FROM m
+)
+SELECT moved_by, "DC", cumulative_change, move_time, move_start
+FROM n
+WHERE ms >= %(start_ms)s AND ms < %(end_ms)s
+ORDER BY ms;
+"""
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -318,6 +340,13 @@ def fetch_dto() -> pd.DataFrame:
     """DTO: every row of dto_shipment_tracking (five columns), times converted to IST. Cached for 15 minutes."""
     import dto
     return dto.prepare(_fetch(DTO_QUERY, {}))
+
+
+@st.cache_data(ttl=900, max_entries=30, show_spinner="Reading the selected dates from the database...")
+def fetch_moves(start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Move: only moves submitted (move_time) inside the window are read, times converted to IST. Cached per window for 15 minutes."""
+    import move
+    return move.prepare(_fetch(MOVE_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)}))
 
 
 def load_csv(file_or_path) -> pd.DataFrame:

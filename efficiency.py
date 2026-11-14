@@ -73,6 +73,15 @@ def level_from_study(b: float, c: float) -> float:
     return config.PICK_STUDY_SECONDS / shape
 
 
+def is_excluded(login) -> bool:
+    """True for a login left out of every activity tab (config.EXCLUDED_LOGINS), whatever its letter case."""
+    return isinstance(login, str) and login.strip().lower() in {x.lower() for x in config.EXCLUDED_LOGINS}
+
+
+def drop_excluded(d: pd.DataFrame, col: str) -> pd.DataFrame:
+    return d[~d[col].map(is_excluded)].copy() if col in d.columns and len(d) else d
+
+
 def exec_name(login: str) -> str:
     if login in LOGIN_NAMES:
         return LOGIN_NAMES[login]
@@ -82,7 +91,7 @@ def exec_name(login: str) -> str:
 # ---------------------------------------------------------------- lines -> lists
 def build_lists(lines: pd.DataFrame, merge_seconds: float = 2.0):
     """Return (lists, lines_with_ml_id)."""
-    d = lines.copy()
+    d = drop_excluded(lines.copy(), "picker")
     d = d.dropna(subset=["make_list_created_at"])
     d = d.sort_values(["picker", "make_list_created_at"], kind="mergesort").reset_index(drop=True)
     prev = d.groupby("picker")["make_list_created_at"].shift()

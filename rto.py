@@ -3,8 +3,8 @@
 One process, two phases (same rules as RTO_Efficiency_v3.xlsx):
  * Phase 1 - carton sorting, one stamp per parcel (return_shipment_tracking.carton_added_at / carton_added_by).
    duration = gap since the same person's previous stamp; standard = fixed seconds per parcel.
- * Phase 2 - trolley transfer + merge to base, one job per carton (return_shipment_tracking_audit).
-   job = Trolley Transfer session start -> ended_at of the Merge session that follows for the same person and carton
+ * Phase 2 - trolley transfer + merge to base, carton by carton (return_shipment_tracking_audit).
+   carton = Trolley Transfer session start -> ended_at of the Merge session that follows for the same person and carton
    (end_reason 'auto_drained' only). The merge start splits it into a transfer part and a merge part.
    standard = transfer (fixed + parcel x parcels + unit x units) + merge (fixed + drug code x drug codes + unit x units).
  * Combined efficiency = (Phase 1 standard + Phase 2 standard) / (Phase 1 actual + Phase 2 actual) over rated work.
@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from efficiency import exec_name, LOGIN_NAMES
+from efficiency import exec_name, drop_excluded, LOGIN_NAMES
 
 NOT_RATED_P1 = ["Not rated: too long", "Not rated: zero gap"]
 NOT_RATED_P2 = ["Not rated: too long for its size", "Not rated: too long (hard cap)", "Not rated: no merge session", "Not rated: end before start"]
@@ -56,8 +56,10 @@ def to_ist(s: pd.Series) -> pd.Series:
     if num.notna().sum() >= max(1, int(0.5 * s.notna().sum())) and s.notna().any():
         sec = np.where(num > 1e11, num / 1000.0, num)
         return pd.to_datetime(pd.Series(sec, index=s.index), unit="s", errors="coerce") + pd.Timedelta(hours=5, minutes=30)
-    out = pd.to_datetime(s, errors="coerce", utc=True)
-    return out.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+    out = pd.to_datetime(s, errors="coerce")          # text without a zone is already IST
+    if getattr(out.dt, "tz", None) is not None:
+        out = out.dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+    return out
 
 
 _DRUG_KEYS = ("drug_code", "drugCode", "drug", "code", "Drug Code")
@@ -138,7 +140,7 @@ def _add_periods(d: pd.DataFrame, col: str) -> pd.DataFrame:
 
 def rate_sort(df: pd.DataFrame, s: RtoSettings) -> pd.DataFrame:
     """df: order_id, carton_added_by, carton_added_at (one row per parcel stamp)."""
-    d = df.copy()
+    d = drop_excluded(df.copy(), "carton_added_by")
     if d.empty:
         d = pd.DataFrame({"order_id": [], "carton_added_by": [], "carton_added_at": pd.Series([], dtype="datetime64[ns]")})
     d["ts"] = pd.to_datetime(d["carton_added_at"], errors="coerce")
@@ -184,7 +186,7 @@ def pair_jobs(main: pd.DataFrame, items: pd.DataFrame) -> pd.DataFrame:
 
 
 def rate_jobs(j: pd.DataFrame, s: RtoSettings) -> pd.DataFrame:
-    d = j.copy()
+    d = drop_excluded(j.copy(), "login")
     for c in ("start", "hand", "end"):
         d[c] = pd.to_datetime(d[c], errors="coerce")
     for c in ("parcels", "dc", "units"):
@@ -210,7 +212,7 @@ def rate_jobs(j: pd.DataFrame, s: RtoSettings) -> pd.DataFrame:
 
 # ------------------------------------------------------------------ combined
 def units_table(sort_d: pd.DataFrame, jobs_d: pd.DataFrame, s: RtoSettings) -> pd.DataFrame:
-    """Rated work of both phases in one table: actual and standard seconds per parcel (Phase 1) or per job (Phase 2)."""
+    """Rated work of both phases in one table: actual and standard seconds per parcel (Phase 1) or per carton (Phase 2)."""
     a = sort_d[sort_d["rated"] & (sort_d["date"] >= pd.Timestamp(s.combined_from))]
     b = jobs_d[jobs_d["rated"]]
     ua = pd.DataFrame({"name": a["name"], "date": a["date"], "week": a["week"], "month": a["month"], "act": a["gap"], "std": s.p1_std, "parcels": 1, "jobs": 0})
@@ -308,7 +310,7 @@ def flags_table(sort_d: pd.DataFrame, jobs_d: pd.DataFrame) -> pd.DataFrame:
 
 def status_counts(sort_d: pd.DataFrame, jobs_d: pd.DataFrame) -> pd.DataFrame:
     a = sort_d["status_text"].value_counts().rename("Parcels")
-    b = jobs_d["status_text"].value_counts().rename("Carton jobs")
+    b = jobs_d["status_text"].value_counts().rename("Cartons")
     return pd.concat([a, b], axis=1).fillna(0).astype(int).sort_values("Parcels", ascending=False)
 
 
@@ -335,7 +337,7 @@ def rated_shares(sort_d: pd.DataFrame, jobs_d: pd.DataFrame) -> dict:
 
 def data_checks(sort_d: pd.DataFrame, jobs_d: pd.DataFrame) -> dict:
     return {"Parcel stamps read": int(len(sort_d)), "Parcels rated": int(sort_d["rated"].sum()),
-            "Carton jobs read": int(len(jobs_d)), "Carton jobs rated": int(jobs_d["rated"].sum()),
-            "Jobs with merge items read": int(jobs_d["dc"].notna().sum()) if len(jobs_d) else 0,
+            "Cartons read": int(len(jobs_d)), "Cartons rated": int(jobs_d["rated"].sum()),
+            "Cartons with merge items read": int(jobs_d["dc"].notna().sum()) if len(jobs_d) else 0,
             "Parcel stamps from": str(sort_d["ts"].min()) if len(sort_d) else "-", "Parcel stamps to": str(sort_d["ts"].max()) if len(sort_d) else "-",
-            "Jobs from": str(jobs_d["start"].min()) if len(jobs_d) else "-", "Jobs to": str(jobs_d["start"].max()) if len(jobs_d) else "-"}
+            "Cartons from": str(jobs_d["start"].min()) if len(jobs_d) else "-", "Cartons to": str(jobs_d["start"].max()) if len(jobs_d) else "-"}

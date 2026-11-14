@@ -8,12 +8,12 @@ import config
 import db
 import checking as ck
 from checking import CheckSettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("Checking efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="ck_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -95,7 +95,7 @@ if raw.empty:
 
 tasks = ck.rate_tasks(raw, S)
 all_checkers = ck.checker_order(tasks)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by date started) - {len(raw):,} tasks read. Weeks and months at the edges of the period may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 chosen = st.multiselect("Checkers", all_checkers, default=all_checkers, key="ck_chosen")
 view = tasks[tasks["name"].isin(chosen)]
 if view.empty:
@@ -104,35 +104,23 @@ if view.empty:
 # ---------------------------------------------------------------------- header
 ov = ck.overview_table(view, S)
 tot = ov.loc["All checkers"]
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="Standard seconds / actual seconds over rated tasks. The standards were set from past checks, so the team sits near 100% by design.")
-c2.metric("ID check standard", f"{S.id_std * (1 + S.allowance):.1f} s")
 c3.metric("Tasks", f"{int(tot['tasks_all']):,}", help=f"{int(tot['tasks_rated']):,} rated, {int(tot['tasks_not_rated']):,} not rated")
-c4.metric(f"Tasks over {S.max_sec / 60:g} min (flagged)", f"{int(tot['over_limit']):,}")
 st.caption("100% = at the standard for the kind of task; above 100% = faster. Checking time = started to finished.")
 
-tab_ov, tab_w, tab_m, tab_d, tab_f, tab_how = st.tabs(["Standard vs actual", "Weekly", "Monthly", "Daily", "Review flags", "How it works"])
+tab_ov, tab_w, tab_m, tab_d, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly", "Daily", "Review flags", "How it works"])
 
 # ------------------------------------------------------------------- overview
 with tab_ov:
-    st.subheader("Each checker's actual pace against the standard")
-    st.markdown("**Standard seconds**")
-    st.dataframe(ck.standard_samples(S).style.format({"Standard seconds": "{:.0f}", "Quantity": "{:,.0f}"}, na_rep="-"), width="stretch", hide_index=True)
-    show = pd.DataFrame({
-        "Tasks (all)": ov["tasks_all"].astype(int), "Tasks rated": ov["tasks_rated"].astype(int), "Tasks not rated": ov["tasks_not_rated"].astype(int),
-        "Over the time limit (flagged)": ov["over_limit"].astype(int), "Actual sec/task": ov["sec_per_task"], "Standard sec/task": ov["std_per_task"],
-        "Efficiency (overall)": ov["efficiency"], "Above / below average": ov["verdict"],
-        "ID checks rated": ov["id_rated"], "ID efficiency": ov["id_eff"], "Quantity checks rated": ov["qty_rated"], "Quantity efficiency": ov["qty_eff"],
-    })
+    st.subheader("Each checker against the standard")
+    show = pd.DataFrame({"Tasks": ov["tasks_all"].astype(int), "Actual sec/task": ov["sec_per_task"], "Efficiency": ov["efficiency"]})
     st.dataframe(
-        show.style.format({"Actual sec/task": "{:.1f}", "Standard sec/task": "{:.1f}", "Efficiency (overall)": "{:.1%}", "ID efficiency": "{:.1%}", "Quantity efficiency": "{:.1%}",
-                           "Tasks (all)": "{:,}", "Tasks rated": "{:,}", "Tasks not rated": "{:,}"}, na_rep="-")
-        .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and 0 < v < 5 else "", subset=["Efficiency (overall)", "ID efficiency", "Quantity efficiency"]),
+        show.style.format({"Actual sec/task": "{:.1f}", "Efficiency": "{:.1%}", "Tasks": "{:,}"}, na_rep="-")
+        .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and 0 < v < 5 else "", subset=["Efficiency"]),
         width="stretch")
-    st.download_button("Download table (CSV)", show.to_csv().encode(), "checking_standard_vs_actual.csv", "text/csv", key="ck_dl_ov")
-    st.caption("Efficiency (overall) adds the standard seconds and the actual seconds across both activities. The ID and quantity columns show each activity on its own. "
-               "Tasks over the limit are flagged and not rated; tasks with a missing timestamp are not considered.")
+    st.download_button("Download table (CSV)", show.to_csv().encode(), "checking_overview.csv", "text/csv", key="ck_dl_ov")
 
 
 def period_tab(period, fmt):
@@ -144,14 +132,6 @@ def period_tab(period, fmt):
     st.dataframe(style_eff(e, p, S.low_sample), width="stretch")
     chart = e.drop(columns="Overall").T
     st.line_chart(chart.drop(columns=[c for c in ["All checkers"] if c in chart.columns]))
-    st.markdown("**Tasks rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Actual sec/task**")
-    sec = m["sec_per_task"].copy(); sec.columns = e.columns
-    st.dataframe(sec.style.format("{:.1f}", na_rep="-"), width="stretch")
-    st.markdown("**Tasks, all (including tasks not rated)**")
-    al = m["tasks_all"].copy(); al.columns = e.columns
-    st.dataframe(al.style.format("{:,.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -169,8 +149,6 @@ with tab_d:
     pick_cols = st.multiselect("Show in chart", list(e.columns), default=["All checkers"], key="ck_daily_chart")
     if pick_cols:
         st.line_chart(e[pick_cols])
-    with st.expander("Tasks rated per day"):
-        st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch", height=500)
 
 # --------------------------------------------------------------- review flags
 with tab_f:
@@ -181,12 +159,14 @@ with tab_f:
                 "- **No time elapsed**: finished in less than the minimum seconds.")
     ft = ck.flags_table(view)
     kinds = sorted(ft["status"].unique())
-    pick = st.multiselect("Show", kinds, default=kinds, key="ck_flag_kinds")
-    ft = ft[ft["status"].isin(pick)] if pick else ft.iloc[0:0]
-    st.dataframe(ft.rename(columns={"task": "Task #", "name": "Checker", "type": "Type", "activity": "Activity", "qty_checked": "Qty checked",
-                                    "created_at": "Started", "time": "Finished", "dur": "Seconds", "std_sec": "Standard seconds", "status": "Status"})
-                 .style.format({"Qty checked": "{:,.0f}", "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"), width="stretch", height=450)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "checking_review_flags.csv", "text/csv", key="ck_dl_flags")
+    st.dataframe(ft["status"].value_counts().rename("Tasks").to_frame(), width="stretch")
+    with st.expander("Show the individual tasks"):
+        pick = st.multiselect("Show", kinds, default=kinds, key="ck_flag_kinds")
+        ft = ft[ft["status"].isin(pick)] if pick else ft.iloc[0:0]
+        st.dataframe(ft.rename(columns={"task": "Task #", "name": "Checker", "type": "Type", "activity": "Activity", "qty_checked": "Qty checked",
+                                        "created_at": "Started", "time": "Finished", "dur": "Seconds", "std_sec": "Standard seconds", "status": "Status"})
+                     .style.format({"Qty checked": "{:,.0f}", "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"), width="stretch", height=450)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "checking_review_flags.csv", "text/csv", key="ck_dl_flags")
 
 # ------------------------------------------------------------------ how it works
 with tab_how:
@@ -214,6 +194,5 @@ For one checker and one period: add up the standard seconds and the actual secon
 Quantity explains only a little of the variation in checking time. The standards were set from past checks, so the team sits near 100%: read efficiency as a comparison
 between checkers and over time. Checkers with few tasks should be read with care (grey markers).
 """)
-    with st.expander("Data checks"):
-        chk = ck.data_checks(tasks)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(ck.data_checks(tasks))

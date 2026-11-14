@@ -9,12 +9,12 @@ import config
 import db
 import efficiency as eff
 from efficiency import Settings
-from ui_common import cell_color, style_eff, fmt_cols
+from ui_common import cell_color, style_eff, fmt_cols, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
-top_l.title("Picking efficiency vs the time-study average")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+top_l.title("Picking efficiency vs the standard")
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -67,30 +67,19 @@ with settings_pop:
     st.caption("Executive names come from config.py.")
 
 # ------------------------------------------------------------ data source + date window
-source_opts = (["Live database"] if db.secrets_available() else []) + ["Upload CSV"]
-dev_csv = os.environ.get("DEV_CSV_PATH")
-if dev_csv:
-    source_opts.insert(0, "Dev CSV (env)")
+dev_csv = os.environ.get("DEV_CSV_PATH")      # developer testing only
+live = db.secrets_available() and not dev_csv
+if not live and not dev_csv:
+    st.info("Picking reads the live database. Add the database secrets (see README) to use this page.")
+    st.stop()
+source = "Live database" if live else "Dev CSV (env)"
 today = dt.datetime.now(db.IST).date()
-
-file_lines = None
+file_lines = db.load_csv(dev_csv) if dev_csv else None
 chosen_window = None            # (start, end) of the period currently picked in the menu
 with st.container(border=True):
-    cs, cf = st.columns([1.2, 5])
-    source = cs.radio("Data source", source_opts, horizontal=False) if len(source_opts) > 1 else source_opts[0]
-    live = source == "Live database"
-    if source == "Dev CSV (env)":
-        file_lines = db.load_csv(dev_csv)
-    elif source == "Upload CSV":
-        up = cf.file_uploader("CSV written by extract_data.py", type="csv")
-        if up is not None:
-            file_lines = db.load_csv(up)
-        else:
-            st.info("Upload the CSV, or add the database secrets (see README) to read live data."); st.stop()
-
     presets = (["Last 7 days", "Last 30 days", "Last 90 days", "This month", "Last month", "Custom"] if live
                else ["All data in file", "Custom"])
-    p1, p2, p3, p4 = cf.columns([2, 2, 2, 1])
+    p1, p2, p3, p4 = st.columns([2, 2, 2, 1])
     preset = p1.selectbox("Period", presets, index=None, placeholder="Select a period", key=f"preset_{source}")
     d_from = d_to = None
     if preset == "Custom":                       # the two date boxes appear only for Custom
@@ -161,8 +150,7 @@ if _fit:
     fit_note.caption(f"Fitted on this period ({_fit[2]:,} rated lists, within each person): {_fit[0]:.2f} s per piece, {_fit[1]:.2f} s per SKU, "
                      f"scale for team = 100%: {_fit[4]:.2f} (R2 {_fit[3]:.2f}). Compare with the values above to see whether the standard needs refreshing.")
 all_execs = eff.exec_order(rated)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by list creation) - {len(lines):,} lines read, {len(rated):,} make lists. "
-           "Weeks and months at the edges of the period may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 chosen = st.multiselect("Executives", all_execs, default=all_execs)
 view = rated[rated["exec"].isin(chosen)]
 if view.empty:
@@ -171,44 +159,26 @@ if view.empty:
 # ---------------------------------------------------------------------- header
 ov = eff.overview_table(view, S)
 tot = ov.loc["All executives"]
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}")
-if S.model == 2:
-    c2.metric("Standard for a typical list", f"{S.std_seconds(224, 47) / 60:.1f} min", help="224 pieces, 47 distinct SKUs - the average list. Standard seconds = scale x (b x pieces + c x SKUs).")
-else:
-    c2.metric("Benchmark (sec/item)", f"{S.bench:.2f}", help="Recorded average x (1 + allowance)")
 c3.metric("Pieces picked", f"{int(tot['pieces_all']):,}", help=f"{int(tot['pieces_rated']):,} rated, {int(tot['pieces_not_rated']):,} not rated")
-c4.metric("Lists flagged for review", f"{int(tot['lists_flagged']):,}")
 st.caption(("100% = at the standard for the list's pieces and SKUs; above 100% = faster. " if S.model == 2 else "100% = at the recorded average; above 100% = faster. ")
-           + "Only picking is compared - assembly has no usable timestamps.")
+           + "Time = list created to last scan.")
 
-tab_ov, tab_w, tab_m, tab_d, tab_f, tab_how = st.tabs(["Recorded vs actual", "Weekly", "Monthly", "Daily", "Review flags", "How it works"])
+tab_ov, tab_w, tab_m, tab_d, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly", "Daily", "Review flags", "How it works"])
 
 # ------------------------------------------------------------------- overview
 with tab_ov:
-    st.subheader("Recorded average vs each executive's actual pace")
-    a, b = st.columns(2)
-    a.metric("Picking - recorded average", f"{config.STUDY_PICKING_SEC_PER_ITEM:.2f} sec/item",
-             help=f"{config.STUDY_CYCLES} clean study cycles, {config.STUDY_ITEMS:,} items")
-    b.metric("Assembly - recorded average (reference only)", f"{config.STUDY_ASSEMBLY_SEC_PER_ITEM:.2f} sec/item")
-    t = ov.copy()
-    t.insert(0, "Notes", [config.EXEC_NOTES.get(i, "") for i in t.index])
+    st.subheader("Each executive against the standard")
     show = pd.DataFrame({
-        "Lists picked": t["lists_picked"].astype(int), "Pieces picked (all)": t["pieces_all"].astype(int),
-        "Lists rated": t["lists_rated"].astype(int), "Pieces rated": t["pieces_rated"].astype(int),
-        "Pieces not rated": t["pieces_not_rated"].astype(int), "Actual picking min (rated)": t["minutes_rated"],
-        "Actual sec/item": t["sec_per_item"], "Recorded average sec/item (reference)": t["benchmark_sec"],
-        "Difference vs study (sec/item, + = slower)": t["difference_sec"], "Efficiency": t["efficiency"],
-        "Above / below average": t["verdict"], "Lists flagged": t["lists_flagged"].astype(int), "Notes": t["Notes"],
+        "Lists picked": ov["lists_picked"].astype(int), "Pieces picked": ov["pieces_all"].astype(int),
+        "Actual sec/item": ov["sec_per_item"], "Efficiency": ov["efficiency"], "Above / below average": ov["verdict"],
     })
     st.dataframe(
-        show.style.format({"Actual picking min (rated)": "{:,.0f}", "Actual sec/item": "{:.2f}", "Recorded average sec/item (reference)": "{:.2f}",
-                           "Difference vs study (sec/item, + = slower)": "{:+.2f}", "Efficiency": "{:.1%}", "Pieces picked (all)": "{:,}",
-                           "Pieces rated": "{:,}", "Pieces not rated": "{:,}"}, na_rep="-")
+        show.style.format({"Actual sec/item": "{:.2f}", "Efficiency": "{:.1%}", "Lists picked": "{:,}", "Pieces picked": "{:,}"}, na_rep="-")
         .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and v < 5 and v > 0 else "", subset=["Efficiency"]),
         width="stretch")
-    st.download_button("Download table (CSV)", show.to_csv().encode(), "recorded_vs_actual.csv", "text/csv")
-    st.caption("'Pieces not rated' is real work on lists that were too small or too long: shown here but kept out of the percentage.")
+    st.download_button("Download table (CSV)", show.to_csv().encode(), "picking_overview.csv", "text/csv")
 
 
 def period_tab(period, label, fmt):
@@ -216,18 +186,10 @@ def period_tab(period, label, fmt):
     e, p = m["efficiency"].copy(), m["pieces_rated"]
     e.columns = [c.strftime(fmt) if hasattr(c, "strftime") else c for c in e.columns]
     p = p.copy(); p.columns = e.columns
-    st.markdown(f"**Efficiency vs recorded average** - grey italics = fewer than {S.low_sample} rated pieces")
+    st.markdown(f"**Efficiency vs standard** - grey italics = fewer than {S.low_sample} rated pieces")
     st.dataframe(style_eff(e, p, S.low_sample), width="stretch")
     chart = e.drop(columns="Overall").T
     st.line_chart(chart.drop(columns=[c for c in ["All executives"] if c in chart.columns]))
-    st.markdown("**Pieces rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Actual sec/item**")
-    sec = m["sec_per_item"].copy(); sec.columns = e.columns
-    st.dataframe(sec.style.format("{:.2f}", na_rep="-"), width="stretch")
-    st.markdown("**Pieces picked, all lists (including lists not rated)**")
-    al = m["pieces_all"].copy(); al.columns = e.columns
-    st.dataframe(al.style.format("{:,.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -245,8 +207,6 @@ with tab_d:
     pick_cols = st.multiselect("Show in chart", list(e.columns), default=["All executives"], key="daily_chart_cols")
     if pick_cols:
         st.line_chart(e[pick_cols])
-    with st.expander("Pieces rated per day"):
-        st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch", height=500)
 
 # --------------------------------------------------------------- review flags
 with tab_f:
@@ -257,28 +217,33 @@ with tab_f:
         f"- **Over {S.max_codes} drug codes**: probably two lists created together and merged.\n"
         "- **Too long**: ran past the maximum minutes (maybe left open); shown but not rated.")
     ft = eff.flags_table(view)
-    kinds = st.multiselect("Show flags", ["Long wait", "Partial list", "Over", "Too long"], default=["Long wait", "Partial list", "Over", "Too long"])
-    if kinds:
-        ft = ft[ft["flags"].apply(lambda s: any(k in s for k in kinds))]
-    st.dataframe(ft.rename(columns={"ml_id": "ML ID", "exec": "Executive", "start": "List created", "lead_in": "Wait before first scan (min)",
-                                    "first": "First scan", "last": "Last scan", "lines": "Lines", "picked_lines": "Lines picked",
-                                    "share": "Share picked", "pieces": "Pieces", "distinct_codes": "Distinct drug codes",
-                                    "flags": "Flags", "status": "Status"})
-                 .style.format({"Wait before first scan (min)": "{:.0f}", "Share picked": "{:.0%}", "Pieces": "{:,}"}, na_rep="-"),
-                 width="stretch", height=450)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "review_flags.csv", "text/csv")
-    st.markdown("---")
-    st.subheader("Look inside a list")
-    ids = ft["ml_id"].tolist() or rated.loc[rated["picked"], "ml_id"].tolist()[:200]
-    pick = st.selectbox("ML ID", ids) if ids else None
-    if pick:
-        r = rated[rated["ml_id"] == pick].iloc[0]
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Executive", r["exec"]); k2.metric("Lines picked", f"{int(r['picked_lines'])}/{int(r['lines'])}")
-        k3.metric("Pieces", f"{int(r['pieces']):,}")
-        k4.metric("Minutes used", "-" if pd.isna(r["minutes"]) else f"{r['minutes']:.0f}")
-        st.write(f"Status: **{r['status']}**" + (f"  |  Flags: {r['flags']}" if r["flags"] else ""))
-        st.dataframe(lines_id[lines_id["ml_id"] == pick].drop(columns=["ml_id"]), width="stretch", height=300)
+    _txt = ft["flags"].astype(str) + " " + ft["status"].astype(str)
+    st.dataframe(pd.DataFrame({"Lists": [int(_txt.str.contains(k, regex=False).sum()) for k in ["Long wait", "Partial list", "Over", "Too long"]]},
+                              index=["Long wait", "Partial list", f"Over {S.max_codes} drug codes", "Too long"]), width="stretch")
+    with st.expander("Show the individual lists"):
+        kinds = st.multiselect("Show flags", ["Long wait", "Partial list", "Over", "Too long"], default=["Long wait", "Partial list", "Over", "Too long"])
+        if kinds:
+            ft = ft[ft["flags"].apply(lambda s: any(k in s for k in kinds))]
+        st.dataframe(ft.rename(columns={"ml_id": "ML ID", "exec": "Executive", "start": "List created", "lead_in": "Wait before first scan (min)",
+                                        "first": "First scan", "last": "Last scan", "lines": "Lines", "picked_lines": "Lines picked",
+                                        "share": "Share picked", "pieces": "Pieces", "distinct_codes": "Distinct drug codes",
+                                        "flags": "Flags", "status": "Status"})
+                     .style.format({"Wait before first scan (min)": "{:.0f}", "Share picked": "{:.0%}", "Pieces": "{:,}"}, na_rep="-"),
+                     width="stretch", height=450)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "review_flags.csv", "text/csv")
+    if is_admin():
+        st.markdown("---")
+        st.subheader("Look inside a list")
+        ids = ft["ml_id"].tolist() or rated.loc[rated["picked"], "ml_id"].tolist()[:200]
+        pick = st.selectbox("ML ID", ids) if ids else None
+        if pick:
+            r = rated[rated["ml_id"] == pick].iloc[0]
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Executive", r["exec"]); k2.metric("Lines picked", f"{int(r['picked_lines'])}/{int(r['lines'])}")
+            k3.metric("Pieces", f"{int(r['pieces']):,}")
+            k4.metric("Minutes used", "-" if pd.isna(r["minutes"]) else f"{r['minutes']:.0f}")
+            st.write(f"Status: **{r['status']}**" + (f"  |  Flags: {r['flags']}" if r["flags"] else ""))
+            st.dataframe(lines_id[lines_id["ml_id"] == pick].drop(columns=["ml_id"]), width="stretch", height=300)
 
 # ------------------------------------------------------------------ how it works
 with tab_how:
@@ -308,6 +273,5 @@ It is **not** an average of per-list percentages, so bigger lists count for more
 Assembly (no usable timestamps) - the recorded {config.STUDY_ASSEMBLY_SEC_PER_ITEM} sec/item is reference only.
 `subtraction_time` (when stock was subtracted) is checked below but not used.
 """)
-    with st.expander("Data checks"):
-        chk = eff.data_checks(lines, rated)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(eff.data_checks(lines, rated))

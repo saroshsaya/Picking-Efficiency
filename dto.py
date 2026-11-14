@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 import config
+from efficiency import drop_excluded
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -89,7 +90,7 @@ def name_of(login) -> str:
 
 # ------------------------------------------------------------------ rating
 def rate_dtos(df: pd.DataFrame, s: DtoSettings) -> pd.DataFrame:
-    d = df.copy()
+    d = drop_excluded(df.copy(), "accepted_by")
     for c in ["accepted_at", "spt", "trh"]:
         d[c] = pd.to_datetime(d[c], errors="coerce")
     d["name"] = d["accepted_by"].map(name_of)

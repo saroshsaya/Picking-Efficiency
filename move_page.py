@@ -9,12 +9,12 @@ import config
 import db
 import move
 from move import MoveSettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("Move efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="mv_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -110,7 +110,7 @@ moves = move.rate_moves(raw, S)
 if moves.empty:
     st.info("Every move in this period belongs to a login that is left out in config.py (MOVE_EXCLUDED_LOGINS)."); st.stop()
 names = move.person_order(moves)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by the date the move was submitted) - {len(moves):,} moves read. Weeks and months at the edges may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 chosen = st.multiselect("People", names, default=names, key="mv_chosen")
 view = moves[moves["name"].isin(chosen)] if chosen else moves.iloc[0:0]
 rated_view = view[view["rated"]]
@@ -119,17 +119,10 @@ rated_view = view[view["rated"]]
 ov = move.overview_table(view, S)
 tot = ov.loc["Team"]
 n_all = len(view); n_timed = int(view["move_start"].notna().sum()); n_rated = int(view["rated"].sum())
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="Standard seconds / actual seconds over rated moves. 100% = at the standard; above 100% = faster.")
-qmed = view["qty"].median() if n_all else np.nan
-c2.metric("Standard for a typical move", "not set" if not S.std_is_set else
-          f"{S.std_fixed + S.std_per_unit * (0 if np.isnan(qmed) else qmed):.0f} s",
-          help=f"Fixed seconds + seconds per unit x the median units moved in this period ({'-' if np.isnan(qmed) else f'{qmed:,.0f}'}).")
 c3.metric("Moves submitted", f"{n_all:,}", help=f"{n_timed:,} have a start time; {n_rated:,} could be rated")
-avg = rated_view["dur"].mean() if len(rated_view) else np.nan
-c4.metric("Average time of rated moves", "-" if np.isnan(avg) else f"{avg:.0f} s",
-          help="MOVE pressed to SUBMIT pressed. Compare it with the standard for a typical move.")
 st.caption("100% = at the standard for the units moved; above 100% = faster. Time = MOVE pressed to SUBMIT pressed, on the login that moved.")
 if not S.std_is_set:
     st.info("The standard for a move is not set yet, so no efficiency percentage is shown. Enter the fixed seconds and the seconds per unit "
@@ -147,12 +140,8 @@ tab_ov, tab_w, tab_m, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly",
 # ------------------------------------------------------------------- overview
 with tab_ov:
     st.subheader("Each person against the standard")
-    show = pd.DataFrame({
-        "Moves": ov["moves"].astype(int), "Rated": ov["rated"].astype(int), "Share rated": ov["share_rated"],
-        "Average seconds": ov["avg_sec"], "Efficiency": ov["efficiency"], "Note": ov["note"],
-    })
+    show = pd.DataFrame({"Moves": ov["moves"].astype(int), "Average seconds": ov["avg_sec"], "Efficiency": ov["efficiency"]})
     disp = show.copy()
-    disp["Share rated"] = show["Share rated"].map(lambda v: "-" if pd.isna(v) else f"{v:.0%}")
     disp["Average seconds"] = show["Average seconds"].map(lambda v: "-" if pd.isna(v) else f"{v:,.0f}")
     disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
     eff = show["Efficiency"]
@@ -174,11 +163,6 @@ def period_tab(period, fmt):
     chart = e.drop(columns="Overall").T
     if chart.drop(columns=[c for c in ["Team"] if c in chart.columns]).notna().any().any():
         st.line_chart(chart.drop(columns=[c for c in ["Team"] if c in chart.columns]))
-    st.markdown("**Moves rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Average seconds per move**")
-    mn = m["avg_sec"].copy(); mn.columns = e.columns
-    st.dataframe(mn.style.format("{:,.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -196,14 +180,15 @@ with tab_f:
                 "- **Start and submit too close**: the two stamps are the same moment, so no time can be measured.\n"
                 "- **Too long**: a break, or the start was left open.\n"
                 "- **Slow**: rated, but slower than the slow multiple in Settings. These stay in the efficiency figures.")
-    ft = move.flags_table(view)
-    st.dataframe(ft.rename(columns={"name": "Person", "dc": "Drug code", "qty": "Units", "move_start": "MOVE pressed", "move_time": "SUBMIT pressed",
-                                    "dur": "Seconds", "std_sec": "Standard seconds", "review": "What to review"})
-                 .style.format({"MOVE pressed": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
-                                "SUBMIT pressed": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
-                                "Units": "{:,.0f}", "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"),
-                 width="stretch", height=400, hide_index=True)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "move_review_flags.csv", "text/csv", key="mv_dl_flags")
+    with st.expander("Show the individual moves (not rated, and slow ones)"):
+        ft = move.flags_table(view)
+        st.dataframe(ft.rename(columns={"name": "Person", "dc": "Drug code", "qty": "Units", "move_start": "MOVE pressed", "move_time": "SUBMIT pressed",
+                                        "dur": "Seconds", "std_sec": "Standard seconds", "review": "What to review"})
+                     .style.format({"MOVE pressed": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
+                                    "SUBMIT pressed": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
+                                    "Units": "{:,.0f}", "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"),
+                     width="stretch", height=400, hide_index=True)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "move_review_flags.csv", "text/csv", key="mv_dl_flags")
 
 # ------------------------------------------------------------------ how it works
 with tab_how:
@@ -232,6 +217,5 @@ A person or the team shows a percentage only with at least {S.min_show} rated mo
 The start stamp is new, so there are few timed moves so far. Read the number of rated moves beside each percentage. If most rated moves take only a few seconds,
 the start may be stamped late rather than when MOVE is pressed, and the percentages would look far too high.
 """)
-    with st.expander("Data checks"):
-        chk = move.data_checks(moves)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(move.data_checks(moves))

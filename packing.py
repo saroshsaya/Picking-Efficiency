@@ -21,7 +21,7 @@ import pandas as pd
 
 import config
 from efficiency import exec_order as _unused  # noqa: F401  (keeps import style consistent)
-from efficiency import exec_name
+from efficiency import exec_name, drop_excluded
 
 NOT_RATED = ["Not rated: too long", "Not rated: too fast", "Not rated: end before start"]
 
@@ -44,7 +44,7 @@ class PackSettings:
 
 
 def rate_orders(df: pd.DataFrame, s: PackSettings) -> pd.DataFrame:
-    d = df.copy()
+    d = drop_excluded(df.copy(), "packer")
     for c in ["TGR", "check_start", "TGS", "label_time"]:
         d[c] = pd.to_datetime(d[c], errors="coerce")
     for c in ["total_item_count", "distinct_sku_count"]:

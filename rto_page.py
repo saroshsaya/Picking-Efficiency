@@ -13,12 +13,12 @@ import config
 import db
 import rto
 from rto import RtoSettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("RTO efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="rt_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -32,7 +32,7 @@ with settings_pop:
                                help="Gap since the same person's previous carton_added_at. Default = mean of rated gaps, so the team sits near 100%.")
     S.p1_cap = st.number_input("Longest gap rated (sec)", value=int(config.RTO_P1_CAP_SEC), step=30, min_value=1, key="rt_p1cap",
                                help="A longer gap is a break or a stop and is not rated. 300 s keeps about 97% of gaps.")
-    st.markdown("**Phase 2 - trolley transfer + merge (per carton job)**")
+    st.markdown("**Phase 2 - trolley transfer + merge (carton by carton)**")
     S.t_fixed = st.number_input("Transfer: fixed seconds per carton", value=float(config.RTO_T_FIXED), step=10.0, format="%.2f", key="rt_tf")
     S.t_parcel = st.number_input("Transfer: seconds per parcel", value=float(config.RTO_T_PARCEL), step=1.0, format="%.2f", key="rt_tp",
                                  help="Open, inspect, check damage / missing, submit, place on the trolley.")
@@ -41,19 +41,19 @@ with settings_pop:
     S.m_drug = st.number_input("Merge: seconds per drug code", value=float(config.RTO_M_DRUG), step=0.5, format="%.2f", key="rt_md",
                                help="Walk to the cubicle / rack, place the medicine, enter the quantity, Merge.")
     S.m_unit = st.number_input("Merge: seconds per unit", value=float(config.RTO_M_UNIT), step=0.1, format="%.2f", key="rt_mu")
-    S.ratio = st.number_input("Max actual / standard for one job", value=float(config.RTO_MAX_RATIO), step=0.5, min_value=1.0, key="rt_ratio",
-                              help="A job that took more than this many times its own standard is treated as a break or an operational problem and is not rated. Raise it if fewer than 95% of jobs are rated.")
-    S.hard_cap = st.number_input("Hard cap on a job (sec)", value=int(config.RTO_HARD_CAP_SEC), step=600, min_value=60, key="rt_hard",
-                                 help="No job longer than this is rated. 14400 = 4 hours.")
+    S.ratio = st.number_input("Max actual / standard for one carton", value=float(config.RTO_MAX_RATIO), step=0.5, min_value=1.0, key="rt_ratio",
+                              help="A carton that took more than this many times its own standard (its standard comes from its size) is treated as a break or an operational problem and is not rated. Raise it if fewer than 95% of jobs are rated.")
+    S.hard_cap = st.number_input("Hard cap on a carton (sec)", value=int(config.RTO_HARD_CAP_SEC), step=600, min_value=60, key="rt_hard",
+                                 help="No carton longer than this is rated, whatever its size. 14400 = 4 hours.")
     st.markdown("**Combined result**")
     S.combined_from = st.date_input("Count Phase 1 in the combined result from", value=dt.date.fromisoformat(config.RTO_COMBINED_FROM), key="rt_from",
                                     help="Phase 2 data only exists from early September 2026 (the audit tables are new), so Phase 1 is counted from the same day to keep both phases on the same days.")
-    S.min_show = st.number_input("Min rated parcels + jobs to show a person's efficiency", value=30, step=5, min_value=0, key="rt_show")
-    S.min_show_period = st.number_input("Min rated parcels + jobs to show a month cell", value=15, step=5, min_value=0, key="rt_showp")
-    S.min_show_day = st.number_input("Min rated parcels + jobs to show a day / week cell", value=10, step=1, min_value=0, key="rt_showd")
-    S.min_jobs = st.number_input("Min rated jobs to show a Phase 2 efficiency", value=8, step=1, min_value=0, key="rt_minj")
-    S.low_sample = st.number_input("Low-sample marker: parcels + jobs below", value=10, step=1, min_value=0, key="rt_low",
-                                   help="Cells built on fewer rated parcels + jobs than this appear in grey italics.")
+    S.min_show = st.number_input("Min rated parcels + cartons to show a person's efficiency", value=30, step=5, min_value=0, key="rt_show")
+    S.min_show_period = st.number_input("Min rated parcels + cartons to show a month cell", value=15, step=5, min_value=0, key="rt_showp")
+    S.min_show_day = st.number_input("Min rated parcels + cartons to show a day / week cell", value=10, step=1, min_value=0, key="rt_showd")
+    S.min_jobs = st.number_input("Min rated cartons to show a Phase 2 efficiency", value=8, step=1, min_value=0, key="rt_minj")
+    S.low_sample = st.number_input("Low-sample marker: parcels + cartons below", value=10, step=1, min_value=0, key="rt_low",
+                                   help="Cells built on fewer rated parcels + cartons than this appear in grey italics.")
     st.caption("Person = carton_added_by (Phase 1) and the person on the trolley session (Phase 2). Anurag only scans parcels in and is not rated (config.py).")
 
 # ------------------------------------------------------------ data source + date window
@@ -73,7 +73,7 @@ chosen_window = None
 with st.container(border=True):
     presets = (["Last 7 days", "Last 30 days", "Last 90 days", "This month", "Last month", "Custom"] if live else ["All data in file", "Custom"])
     p1, p2, p3, p4 = st.columns([2, 2, 2, 1])
-    preset = p1.selectbox("Period (by date sorted / job started)", presets, index=None, placeholder="Select a period", key="rt_preset")
+    preset = p1.selectbox("Period (by date sorted / carton started)", presets, index=None, placeholder="Select a period", key="rt_preset")
     d_from = d_to = None
     if preset == "Custom":
         if live:
@@ -142,13 +142,13 @@ else:
 if audit_note:
     st.warning(audit_note)
 elif len(jobs_d) and jobs_d["dc"].notna().sum() == 0:
-    st.warning("Carton jobs were found but none has merge items (drug codes), so none could be rated. Check the item_details column of the audit table.")
+    st.warning("Cartons were found but none has merge items (drug codes), so none could be rated. Check the item_details column of the audit table.")
 if sort_d.empty and jobs_d.empty:
     st.info(f"No RTO work between {start:%d %b %Y} and {end:%d %b %Y}."); st.stop()
 
 u_all = rto.units_table(sort_d, jobs_d, S)
 names = rto.name_order(u_all["name"].unique())
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST) - {len(raw_sort):,} parcel stamps and {len(jobs_d):,} carton jobs read. Weeks and months at the edges may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 if not names:
     st.warning("Nothing in this period could be rated in the combined result. See Review flags for the reasons.")
 chosen = st.multiselect("People", names, default=names, key="rt_chosen")
@@ -159,12 +159,12 @@ jobs_v = jobs_d[jobs_d["name"].isin(chosen) | ~jobs_d["rated"]] if chosen and le
 # ---------------------------------------------------------------------- header
 ov = rto.combined_table(u, S) if len(u) else pd.DataFrame()
 tot = ov.loc["Team"] if "Team" in ov.index else None
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if tot is None or pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="(Phase 1 + Phase 2 standard seconds) / (Phase 1 + Phase 2 actual seconds) over rated work. Standards are fitted on the team, so the team sits near 100% by design.")
 c2.metric("Parcels sorted (rated)", "-" if tot is None else f"{int(tot['parcels']):,}")
-c3.metric("Carton jobs (rated)", "-" if tot is None else f"{int(tot['jobs']):,}")
-c4.metric("Rated work", "-" if tot is None else f"{tot['hours']:.1f} h")
+c3.metric("Cartons processed (rated)", "-" if tot is None else f"{int(tot['jobs']):,}",
+          help="Whole cartons taken through trolley transfer + merge (Phase 2). One carton holds about 17 parcels, so this is a much smaller number than parcels sorted.")
 st.caption(f"100% = at the team standard; above 100% = faster. Counted from {S.combined_from:%d %b %Y} (the first day with Phase 2 data). Anurag only scans parcels in and is not rated.")
 
 tab_ov, tab_d, tab_w, tab_m, tab_f, tab_how = st.tabs(["Overview", "Daily", "Weekly", "Monthly", "Review flags", "How it works"])
@@ -174,16 +174,12 @@ with tab_ov:
     if ov.empty:
         st.info("No rated work in this period (the combined result starts on the date in Settings).")
     else:
-        show = pd.DataFrame({"Parcels sorted": ov["parcels"].astype(int), "Carton jobs": ov["jobs"].astype(int), "Rated hours": ov["hours"],
-                             "Efficiency": ov["efficiency"], "Above / below team": ov["verdict"]})
-        show["Note"] = np.where(ov["n"] == 0, "No rated work",
-                                np.where(ov["efficiency"].isna() & (ov.index != "Team"), f"Too few rated parcels + jobs (under {S.min_show}) - no efficiency shown", ""))
+        show = pd.DataFrame({"Parcels sorted": ov["parcels"].astype(int), "Cartons processed": ov["jobs"].astype(int), "Efficiency": ov["efficiency"]})
         disp = show.copy()
-        disp["Rated hours"] = show["Rated hours"].map(lambda v: "-" if pd.isna(v) else f"{v:.1f}")
         disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
         eff = show["Efficiency"]
         st.dataframe(disp.style.apply(lambda col: [cell_color(v) if pd.notna(v) and 0 < v < 5 else "" for v in eff], subset=["Efficiency"]), width="stretch")
-        st.caption(f"A dash = fewer than {S.min_show} rated parcels + jobs. Parcels are Phase 1 (carton sorting); carton jobs are Phase 2 (trolley transfer + merge to base).")
+        st.caption(f"A dash = fewer than {S.min_show} rated parcels + cartons. One carton holds about 17 parcels.")
         st.download_button("Download table (CSV)", show.to_csv().encode(), "rto_overview.csv", "text/csv", key="rt_dl_ov")
 
     st.subheader("Phase 1 - carton sorting")
@@ -191,33 +187,24 @@ with tab_ov:
     if p1t.empty:
         st.info("No rated parcels in this period.")
     else:
-        d1 = pd.DataFrame({"Rated parcels": p1t["parcels"].astype(int), "Median sec": p1t["median_sec"], "Mean sec": p1t["mean_sec"],
-                           "Efficiency": p1t["efficiency"], "Gaps too long": p1t["too_long"]})
-        for c, fmt in (("Median sec", "{:.0f}"), ("Mean sec", "{:.1f}"), ("Efficiency", "{:.1%}")):
-            d1[c] = d1[c].map(lambda v, fmt=fmt: "-" if pd.isna(v) else fmt.format(v))
+        d1 = pd.DataFrame({"Rated parcels": p1t["parcels"].astype(int), "Efficiency": p1t["efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")})
         st.dataframe(d1, width="stretch")
-        st.caption("All dates in the period (not only from the combined start date). A gap above the cap is a break and is not rated.")
 
-    st.subheader("Phase 2 - trolley transfer + merge to base (one job per carton)")
+    st.subheader("Phase 2 - trolley transfer + merge to base (carton by carton)")
     p2t = rto.phase2_table(jobs_v, S) if len(jobs_v) and jobs_v["rated"].any() else pd.DataFrame()
     if p2t.empty:
-        st.info("No rated carton jobs in this period.")
+        st.info("No rated cartons in this period.")
     else:
-        d2 = pd.DataFrame({"Rated jobs": p2t["jobs"].astype(int), "Avg parcels": p2t["avg_parcels"], "Avg drug codes": p2t["avg_drugs"], "Avg units": p2t["avg_units"],
-                           "Median job (min)": p2t["median_min"], "Efficiency": p2t["eff_all"], "Transfer eff.": p2t["eff_transfer"], "Merge eff.": p2t["eff_merge"],
-                           "Not rated": p2t["not_rated"]})
-        for c in ("Avg parcels", "Avg drug codes", "Avg units", "Median job (min)"):
-            d2[c] = d2[c].map(lambda v: "-" if pd.isna(v) else f"{v:.1f}")
-        for c in ("Efficiency", "Transfer eff.", "Merge eff."):
-            d2[c] = d2[c].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
+        d2 = pd.DataFrame({"Cartons rated": p2t["jobs"].astype(int), "Efficiency": p2t["eff_all"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")})
         st.dataframe(d2, width="stretch")
-        st.caption(f"A dash = fewer than {S.min_jobs} rated jobs. Transfer = first parcel scan to merge start; merge = merge start to its end.")
-    sh = rto.rated_shares(sort_d, jobs_d); sg = rto.suggested(sort_d, jobs_d)
-    bits = [f"Rated share: Phase 1 {sh['p1']:.1%}, Phase 2 {sh['p2']:.1%} (aim for 95% or more; raise the cap / ratio in Settings if lower)."]
-    if "t" in sg and "m" in sg:
-        bits.append("This period would fit: transfer {:.0f} + {:.1f} x parcels + {:.1f} x units; merge {:.0f} + {:.1f} x drug codes + {:.1f} x units. Current settings: transfer {:.0f} + {:.1f} + {:.1f}; merge {:.0f} + {:.1f} + {:.1f}.".format(
-            *sg["t"], *sg["m"], S.t_fixed, S.t_parcel, S.t_unit, S.m_fixed, S.m_drug, S.m_unit))
-    st.caption(" ".join(bits))
+        st.caption(f"A dash = fewer than {S.min_jobs} rated cartons.")
+    if is_admin():
+        sh = rto.rated_shares(sort_d, jobs_d); sg = rto.suggested(sort_d, jobs_d)
+        bits = [f"Rated share: Phase 1 {sh['p1']:.1%}, Phase 2 {sh['p2']:.1%} (aim for 95% or more; raise the cap / ratio in Settings if lower)."]
+        if "t" in sg and "m" in sg:
+            bits.append("This period would fit: transfer {:.0f} + {:.1f} x parcels + {:.1f} x units; merge {:.0f} + {:.1f} x drug codes + {:.1f} x units. Current settings: transfer {:.0f} + {:.1f} + {:.1f}; merge {:.0f} + {:.1f} + {:.1f}.".format(
+                *sg["t"], *sg["m"], S.t_fixed, S.t_parcel, S.t_unit, S.m_fixed, S.m_drug, S.m_unit))
+        st.caption(" ".join(bits))
 
 
 def period_tab(period, fmt, min_n, key):
@@ -227,15 +214,10 @@ def period_tab(period, fmt, min_n, key):
     e, p = m["efficiency"].copy(), m["n"]
     e.columns = [c.strftime(fmt) if hasattr(c, "strftime") else c for c in e.columns]
     p = p.copy(); p.columns = e.columns
-    st.markdown(f"**Efficiency vs standard** - grey italics = fewer than {S.low_sample} rated parcels + jobs")
+    st.markdown(f"**Efficiency vs standard** - grey italics = fewer than {S.low_sample} rated parcels + cartons")
     st.dataframe(style_eff(e, p, S.low_sample), width="stretch")
     chart = e.drop(columns="Overall").T
     st.line_chart(chart.drop(columns=[c for c in ["Team"] if c in chart.columns]))
-    st.markdown("**Rated parcels + jobs** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Rated hours**")
-    hrs = m["hours"].copy(); hrs.columns = e.columns
-    st.dataframe(hrs.style.format("{:.1f}", na_rep="-"), width="stretch")
 
 
 with tab_d:
@@ -251,19 +233,21 @@ with tab_m:
 with tab_f:
     st.subheader("Where work was not rated")
     st.dataframe(rto.status_counts(sort_d, jobs_d), width="stretch")
+    st.caption("Rated = counted in the efficiency. Every other row is a reason why a parcel or carton was left out (it is not deleted, it just does not count). The 95% rule is checked only on work that could be rated (not on 'not on team list' or 'no login').")
     st.markdown("- **Phase 1 too long**: a gap over the cap - a break or a stop, not slow sorting.\n"
-                "- **Phase 2 too long for its size / hard cap**: the carton job took far longer than its own standard - a break, an interruption or an operational problem.\n"
+                "- **Phase 2 too long for its size / hard cap**: the carton took far longer than its own standard (its standard comes from its size) - a break, an interruption or an operational problem.\n"
                 "- **No merge session**: the trolley session has no auto_drained merge session after it (reset or superseded).\n"
                 "- **Not on team list**: Anurag (scan-in only), admin and other logins in `RTO_EXCLUDED_LOGINS`.")
     ft = rto.flags_table(sort_d, jobs_d)
     if ft.empty:
-        st.info("No carton jobs were left unrated for size, time or a missing merge session.")
+        st.info("No cartons were left unrated for size, time or a missing merge session.")
     else:
-        st.dataframe(ft.rename(columns={"name": "Person", "carton": "Carton", "start": "Job start", "end": "Job end", "act": "Seconds", "std_total": "Standard sec",
-                                        "parcels": "Parcels", "dc": "Drug codes", "units": "Units", "status_text": "Status"})
-                     .style.format({"Job start": lambda v: v.strftime("%d-%b-%y %H:%M"), "Job end": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M"),
-                                    "Seconds": "{:,.0f}", "Standard sec": "{:,.0f}", "Carton": "{:.0f}", "Drug codes": "{:.0f}", "Units": "{:,.0f}"}, na_rep="-"), width="stretch", height=300)
-        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "rto_review_flags.csv", "text/csv", key="rt_dl_flags")
+        with st.expander("Show the individual cartons"):
+            st.dataframe(ft.rename(columns={"name": "Person", "carton": "Carton", "start": "Carton start", "end": "Carton end", "act": "Seconds", "std_total": "Standard sec",
+                                            "parcels": "Parcels", "dc": "Drug codes", "units": "Units", "status_text": "Status"})
+                         .style.format({"Carton start": lambda v: v.strftime("%d-%b-%y %H:%M"), "Carton end": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M"),
+                                        "Seconds": "{:,.0f}", "Standard sec": "{:,.0f}", "Carton": "{:.0f}", "Drug codes": "{:.0f}", "Units": "{:,.0f}"}, na_rep="-"), width="stretch", height=300)
+            st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "rto_review_flags.csv", "text/csv", key="rt_dl_flags")
 
 with tab_how:
     st.markdown(f"""
@@ -278,24 +262,29 @@ takes the full trolley to the cubicles and merges each drug to base. A carton ho
 ### One process, two phases
 It is one process, split in two for the calculation and shown here as one result:
 **Phase 1** - carton sorting, one stamp per parcel (`carton_added_at`, by `carton_added_by`).
-**Phase 2** - trolley transfer + merge to base, one job per carton (the audit tables, `workflow` trolley_transfer and merge).
+**Phase 2** - trolley transfer + merge to base, carton by carton (the audit tables, `workflow` trolley_transfer and merge). A *carton* is one whole carton taken through trolley transfer and then merge; a person normally does 1 to 5 cartons a day, and one carton holds about 17 parcels.
 
 ### Phase 1 time and standard
 Duration of a parcel = its `carton_added_at` minus the same person's previous one. A gap over {S.p1_cap:g} seconds is a break and is not rated. Standard = **{S.p1_std:g} seconds** per parcel.
 
 ### Phase 2 time and standard
-A job starts at the first parcel scan of a carton in Trolley Transfer and ends at `ended_at` of the Merge session that follows for the same person and carton (only sessions ending `auto_drained`; reset and superseded sessions hold no items).
-The start of the Merge session splits the job into a transfer part and a merge part.
-Standard = transfer (**{S.t_fixed:g} + {S.t_parcel:g} x parcels + {S.t_unit:g} x units**) + merge (**{S.m_fixed:g} + {S.m_drug:g} x drug codes + {S.m_unit:g} x units**), in seconds.
-Units = quantity merged back; drug codes = distinct drug codes merged. A job that took more than **{S.ratio:g} times** its own standard, or more than {S.hard_cap:g} seconds, is not rated (break or operational problem).
+**One carton's time.** The clock starts at the first parcel scan of the carton in Trolley Transfer and stops at `ended_at` of the Merge session that follows for the same person and carton (only sessions ending `auto_drained`; reset and superseded sessions were abandoned and hold no items).
+
+**Why two parts?** Inside a carton the person does two kinds of work: first *transfer* (scan, open, check each parcel, place the medicines on the trolley), then *merge* (take the trolley to the cubicles and put every medicine back to base). The system does not stamp when the transfer ends, but it does stamp when the Merge session *starts*. That moment is the dividing line: before it = transfer part, after it = merge part. Each part has its own standard.
+
+**Standard** = transfer (**{S.t_fixed:g} + {S.t_parcel:g} x parcels + {S.t_unit:g} x units**) + merge (**{S.m_fixed:g} + {S.m_drug:g} x drug codes + {S.m_unit:g} x units**), in seconds. Units = quantity merged back; drug codes = distinct drug codes merged. The numbers were fitted on the team's own cartons, which is why the team sits near 100%; the small negative fixed term is a side effect of the fit, not a real negative time.
+
+**Cartons we leave out, and why.** A carton is left out only when it took far longer than it should for its size, because then the time usually shows a break, a phone call, waiting or a system problem, not speed: (1) more than **{S.ratio:g} times** its own standard (a carton with a 30-minute standard is left out above {30*S.ratio:g} minutes), (2) more than {S.hard_cap:g} seconds whatever its size, (3) bad data (no finished merge session, or merge ends before the carton starts). Left-out cartons are not deleted: see the Review flags tab. The ratio is chosen so at least 95% of the cartons that could be rated are counted.
 
 ### How efficiency is calculated
-Add the standard seconds and the actual seconds of a person's rated parcels (Phase 1) and rated carton jobs (Phase 2), then divide once. The combined result counts Phase 1 only from {S.combined_from:%d %b %Y}, the first day with Phase 2 data.
-People with fewer than {S.min_show} rated parcels + jobs show no percentage.
+Add the standard seconds and the actual seconds of a person's rated parcels (Phase 1) and rated cartons (Phase 2), then divide once. What is added is always seconds, never counts, so parcels and cartons can sit in the same sum. The combined result counts Phase 1 only from {S.combined_from:%d %b %Y}, the first day with Phase 2 data.
+People with fewer than {S.min_show} rated parcels + cartons show no percentage (a % built on very little work is mostly luck).
 
 ### Caution
-The audit tables are new, so Phase 2 has few jobs and most are one person's. Use the percentages as a guide. The standards are fitted on this data, so the team sits near 100% by design.
+The audit tables are new, so Phase 2 has few cartons and most are one person's. Use the percentages as a guide. The standards are fitted on this data, so the team sits near 100% by design.
+
+### Work not separated yet (to confirm with the RTO team)
+The standard is built from time stamps, so anything not stamped is mixed into the actual time. Still to confirm with the people who do RTO: parcels that are not SayaCare parcels (photo or video needed?), damaged or leaking parcels, missing or wrong medicines, unreadable barcodes, medicines that are not merged back, wrong-carton re-sorting, system freezes, waiting for trolley / cubicle / stock, and other duties in the middle of a carton. If a case is frequent and slow it should get its own stamp or log and standard; if rare, the ratio rule already leaves out the very long ones.
 """)
-    with st.expander("Data checks"):
-        chk = rto.data_checks(sort_d, jobs_d)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(rto.data_checks(sort_d, jobs_d))

@@ -62,3 +62,34 @@ def fmt_cols(df, **kw):
     return df.style.format(kw, na_rep="-")
 
 
+# ------------------------------------------------------------------ admin tools (off by default; switched on from the Home page)
+def is_admin() -> bool:
+    return bool(st.session_state.get("admin_on", False))
+
+
+def settings_area(col):
+    """Where a page puts its settings. Admin: the Settings button. Everyone else: the same inputs, kept out of sight,
+    so every page runs on the standards in config.py."""
+    if is_admin():
+        return col.popover("☰ Settings", use_container_width=True)
+    box = st.container(key="hidden_settings")
+    box.markdown("<style>.st-key-hidden_settings{display:none !important;}</style>", unsafe_allow_html=True)
+    return box
+
+
+def data_checks_box(checks: dict):
+    with st.expander("Data checks (admin)"):
+        st.table(pd.DataFrame({"Check": list(checks.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in checks.values()]}))
+
+
+# ------------------------------------------------------------------ the activity bar at the top fills the window width
+NAV_CSS = """
+<style>
+@media (min-width: 900px) {
+  header[data-testid="stHeader"] [data-testid="stToolbar"] > div:first-child,
+  header[data-testid="stHeader"] .rc-overflow { flex: 1 1 auto !important; width: 100% !important; }
+  header[data-testid="stHeader"] .rc-overflow { display: flex !important; }
+  header[data-testid="stHeader"] .rc-overflow-item { flex: 1 1 0 !important; display: flex !important; justify-content: center; }
+}
+</style>
+"""

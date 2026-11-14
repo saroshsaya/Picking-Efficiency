@@ -78,7 +78,7 @@ def rate_moves(df: pd.DataFrame, s: MoveSettings) -> pd.DataFrame:
     for c in ["move_start", "move_time"]:
         d[c] = pd.to_datetime(d[c], errors="coerce")
     d = d[d["move_time"].notna()].copy()
-    excluded = {x.lower() for x in config.MOVE_EXCLUDED_LOGINS}
+    excluded = {x.lower() for x in config.MOVE_EXCLUDED_LOGINS | config.EXCLUDED_LOGINS}
     d = d[~d["login"].fillna("").str.lower().isin(excluded)].copy()
     d["name"] = d["login"].map(name_of)
     d["dur"] = (d["move_time"] - d["move_start"]).dt.total_seconds().round()

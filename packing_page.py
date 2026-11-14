@@ -9,12 +9,12 @@ import config
 import db
 import packing as pk
 from packing import PackSettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("Packing efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="pk_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -123,7 +123,7 @@ orders = orders[(orders["TGS"] >= s_dt) & (orders["TGS"] < e_dt)]
 if orders.empty:
     st.info(f"No packed orders between {start:%d %b %Y} and {end:%d %b %Y}."); st.stop()
 all_packers = pk.packer_order(orders)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by date packed) - {len(raw):,} orders read. Weeks and months at the edges of the period may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 chosen = st.multiselect("Packers", all_packers, default=all_packers, key="pk_chosen")
 view = orders[orders["name"].isin(chosen)]
 if view.empty:
@@ -132,39 +132,23 @@ if view.empty:
 # ---------------------------------------------------------------------- header
 ov = pk.overview_table(view, S)
 tot = ov.loc["All packers"]
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="Standard seconds / actual seconds over rated orders. The standard was fitted on past orders, so the team sits near 100% by design.")
-c2.metric("Standard for a typical order (14 items, 3.5 SKUs)", f"{(S.a + S.b * 14 + S.c * 3.5) * (1 + S.allowance):.0f} s")
 c3.metric("Orders packed", f"{int(tot['orders_all']):,}", help=f"{int(tot['orders_rated']):,} rated, {int(tot['orders_not_rated']):,} not rated")
-c4.metric("Orders flagged for review", f"{int(tot['orders_flagged']):,}")
 st.caption("100% = at the standard for the order's items and SKUs; above 100% = faster. Packing time = check_start to TGS.")
 
-tab_ov, tab_w, tab_m, tab_d, tab_b, tab_f, tab_how = st.tabs(["Recorded vs actual", "Weekly", "Monthly", "Daily", "Bottlenecks", "Review flags", "How it works"])
+tab_ov, tab_w, tab_m, tab_d, tab_b, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly", "Daily", "Bottlenecks", "Review flags", "How it works"])
 
 # ------------------------------------------------------------------- overview
 with tab_ov:
-    st.subheader("Each packer's actual pace against the standard")
-    a, b = st.columns([1, 2])
-    a.metric("Recorded average (time study)", f"{S.study_sec_per_item:.2f} sec/item", help="Reference only: it does not allow for order size.")
-    b.markdown("**Standard seconds for sample orders**")
-    b.dataframe(pk.standard_samples(S).style.format({"Standard seconds": "{:.0f}", "SKUs": "{:g}"}), width="stretch", hide_index=True)
-    show = pd.DataFrame({
-        "Orders packed (all)": ov["orders_all"].astype(int), "Orders rated": ov["orders_rated"].astype(int),
-        "Orders not rated": ov["orders_not_rated"].astype(int), "Actual sec/order": ov["sec_per_order"],
-        "Standard sec/order": ov["std_per_order"], "Actual sec/item": ov["sec_per_item"],
-        "Recorded average sec/item (reference)": ov["study_sec_per_item"], "Difference vs study (sec/item, + = slower)": ov["diff_vs_study"],
-        "Efficiency": ov["efficiency"], "Above / below average": ov["verdict"], "Orders flagged": ov["orders_flagged"],
-    })
+    st.subheader("Each packer against the standard")
+    show = pd.DataFrame({"Orders packed": ov["orders_all"].astype(int), "Actual sec/order": ov["sec_per_order"], "Efficiency": ov["efficiency"]})
     st.dataframe(
-        show.style.format({"Actual sec/order": "{:.1f}", "Standard sec/order": "{:.1f}", "Actual sec/item": "{:.2f}",
-                           "Recorded average sec/item (reference)": "{:.2f}", "Difference vs study (sec/item, + = slower)": "{:+.2f}",
-                           "Efficiency": "{:.1%}", "Orders packed (all)": "{:,}", "Orders rated": "{:,}", "Orders not rated": "{:,}"}, na_rep="-")
+        show.style.format({"Actual sec/order": "{:.1f}", "Efficiency": "{:.1%}", "Orders packed": "{:,}"}, na_rep="-")
         .map(lambda v: cell_color(v) if isinstance(v, float) and not np.isnan(v) and 0 < v < 5 else "", subset=["Efficiency"]),
         width="stretch")
-    st.download_button("Download table (CSV)", show.to_csv().encode(), "packing_recorded_vs_actual.csv", "text/csv", key="pk_dl_ov")
-    st.caption("'Actual sec/item' is shown against the study for reference only; it does not allow for order size, so efficiency is measured against the standard instead. "
-               "Orders not rated (too long, too fast, no start time, no item counts) are listed on Review flags.")
+    st.download_button("Download table (CSV)", show.to_csv().encode(), "packing_overview.csv", "text/csv", key="pk_dl_ov")
 
 
 def period_tab(period, fmt, key):
@@ -176,14 +160,6 @@ def period_tab(period, fmt, key):
     st.dataframe(style_eff(e, p, S.low_sample), width="stretch")
     chart = e.drop(columns="Overall").T
     st.line_chart(chart.drop(columns=[c for c in ["All packers"] if c in chart.columns]))
-    st.markdown("**Orders rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Actual sec/order**")
-    sec = m["sec_per_order"].copy(); sec.columns = e.columns
-    st.dataframe(sec.style.format("{:.1f}", na_rep="-"), width="stretch")
-    st.markdown("**Orders packed, all (including orders not rated)**")
-    al = m["orders_all"].copy(); al.columns = e.columns
-    st.dataframe(al.style.format("{:,.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -201,8 +177,6 @@ with tab_d:
     pick_cols = st.multiselect("Show in chart", list(e.columns), default=["All packers"], key="pk_daily_chart")
     if pick_cols:
         st.line_chart(e[pick_cols])
-    with st.expander("Orders rated per day"):
-        st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch", height=500)
 
 # ----------------------------------------------------------------- bottlenecks
 with tab_b:
@@ -219,20 +193,21 @@ with tab_b:
     wk = bn["week"].rename(columns=ren); wk.index = [i.strftime("%d-%b") for i in wk.index]
     st.markdown("**By week**"); st.dataframe(wk.style.format(fm, na_rep="-"), width="stretch")
     st.line_chart(wk[["% long waits", "% label delays"]])
-    ha = bn["hour_assembled"].rename(columns=ren)[["Orders", "Avg queue wait (min)", f"Long waits (> {S.long_wait_min:g} min)", "% long waits", f"Next-day waits (> {S.max_wait_h:g} h)"]]
-    ha.index = [f"{int(h):02d}:00" for h in ha.index]
-    st.markdown("**Queue wait by the hour the order was assembled (TGR)** - orders assembled late in the day mostly wait until the next day")
-    st.dataframe(ha.style.format(fm, na_rep="-"), width="stretch")
-    st.bar_chart(ha["Avg queue wait (min)"])
-    hd = bn["hour_advanced"].rename(columns=ren)[["Orders", "Orders with label time", f"Label delays (> {S.label_thr_s:g} s)", "% label delays", "Next-day label delays", "Total label delay (min)"]]
-    hd.index = [f"{int(h):02d}:00" for h in hd.index]
-    st.markdown("**Label delay by the hour the Advance was clicked (TGS)**")
-    st.dataframe(hd.style.format(fm, na_rep="-"), width="stretch")
-    dd = bn["date"].rename(columns=ren)[["Orders", "Avg queue wait (min)", f"Long waits (> {S.long_wait_min:g} min)", f"Next-day waits (> {S.max_wait_h:g} h)",
-                                       f"Label delays (> {S.label_thr_s:g} s)", "Next-day label delays", "Total label delay (min)"]]
-    dd.index = [i.strftime("%a %d-%b") for i in dd.index]
-    with st.expander("By day"):
-        st.dataframe(dd.style.format(fm, na_rep="-"), width="stretch", height=500)
+    if is_admin():
+        ha = bn["hour_assembled"].rename(columns=ren)[["Orders", "Avg queue wait (min)", f"Long waits (> {S.long_wait_min:g} min)", "% long waits", f"Next-day waits (> {S.max_wait_h:g} h)"]]
+        ha.index = [f"{int(h):02d}:00" for h in ha.index]
+        st.markdown("**Queue wait by the hour the order was assembled (TGR)** - orders assembled late in the day mostly wait until the next day")
+        st.dataframe(ha.style.format(fm, na_rep="-"), width="stretch")
+        st.bar_chart(ha["Avg queue wait (min)"])
+        hd = bn["hour_advanced"].rename(columns=ren)[["Orders", "Orders with label time", f"Label delays (> {S.label_thr_s:g} s)", "% label delays", "Next-day label delays", "Total label delay (min)"]]
+        hd.index = [f"{int(h):02d}:00" for h in hd.index]
+        st.markdown("**Label delay by the hour the Advance was clicked (TGS)**")
+        st.dataframe(hd.style.format(fm, na_rep="-"), width="stretch")
+        dd = bn["date"].rename(columns=ren)[["Orders", "Avg queue wait (min)", f"Long waits (> {S.long_wait_min:g} min)", f"Next-day waits (> {S.max_wait_h:g} h)",
+                                           f"Label delays (> {S.label_thr_s:g} s)", "Next-day label delays", "Total label delay (min)"]]
+        dd.index = [i.strftime("%a %d-%b") for i in dd.index]
+        with st.expander("By day"):
+            st.dataframe(dd.style.format(fm, na_rep="-"), width="stretch", height=500)
 
 # --------------------------------------------------------------- review flags
 with tab_f:
@@ -244,14 +219,16 @@ with tab_f:
                 "- **No item counts**: the order could not be matched to its item and SKU counts.")
     ft = pk.flags_table(view)
     kinds = sorted(ft["status"].unique())
-    pick = st.multiselect("Show", kinds, default=kinds, key="pk_flag_kinds")
-    ft = ft[ft["status"].isin(pick)] if pick else ft.iloc[0:0]
-    st.dataframe(ft.rename(columns={"id": "Order ID", "name": "Packer", "date": "Date packed", "check_start": "Packing started", "TGS": "Advance (TGS)",
-                                    "dur": "Packing seconds", "total_item_count": "Items", "distinct_sku_count": "Distinct SKUs",
-                                    "std_sec": "Standard seconds", "status": "Status"})
-                 .style.format({"Date packed": lambda v: v.strftime("%d-%b-%y"), "Packing seconds": "{:,.0f}", "Standard seconds": "{:.0f}", "Items": "{:,.0f}", "Distinct SKUs": "{:,.0f}"}, na_rep="-"),
-                 width="stretch", height=450)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "packing_review_flags.csv", "text/csv", key="pk_dl_flags")
+    st.dataframe(ft["status"].value_counts().rename("Orders").to_frame(), width="stretch")
+    with st.expander("Show the individual orders"):
+        pick = st.multiselect("Show", kinds, default=kinds, key="pk_flag_kinds")
+        ft = ft[ft["status"].isin(pick)] if pick else ft.iloc[0:0]
+        st.dataframe(ft.rename(columns={"id": "Order ID", "name": "Packer", "date": "Date packed", "check_start": "Packing started", "TGS": "Advance (TGS)",
+                                        "dur": "Packing seconds", "total_item_count": "Items", "distinct_sku_count": "Distinct SKUs",
+                                        "std_sec": "Standard seconds", "status": "Status"})
+                     .style.format({"Date packed": lambda v: v.strftime("%d-%b-%y"), "Packing seconds": "{:,.0f}", "Standard seconds": "{:.0f}", "Items": "{:,.0f}", "Distinct SKUs": "{:,.0f}"}, na_rep="-"),
+                     width="stretch", height=450)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "packing_review_flags.csv", "text/csv", key="pk_dl_flags")
 
 # ------------------------------------------------------------------ how it works
 with tab_how:
@@ -277,6 +254,5 @@ For one packer and one period: add up the standard seconds and the actual second
 ### Bottlenecks
 Queue wait (assembled to packing started) and label delay (Advance to label) are recorded for later analysis. They never affect efficiency.
 """)
-    with st.expander("Data checks"):
-        chk = pk.data_checks(orders)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(pk.data_checks(orders))

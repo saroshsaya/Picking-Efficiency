@@ -92,7 +92,7 @@ def rate_orders(df: pd.DataFrame, s: AssemblySettings) -> pd.DataFrame:
     for c in ["tgr", "first_sub"]:
         d[c] = pd.to_datetime(d[c], errors="coerce")
     d = d[d["tgr"].notna()].copy()
-    excluded = {x.lower() for x in config.ASM_EXCLUDED_LOGINS}
+    excluded = {x.lower() for x in config.ASM_EXCLUDED_LOGINS | config.EXCLUDED_LOGINS}
     d = d[~d["login"].fillna("").str.strip().str.lower().isin(excluded)].copy()
     d["name"] = d["login"].map(name_of)
     d["dur"] = (d["tgr"] - d["first_sub"]).dt.total_seconds().round()

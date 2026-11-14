@@ -9,12 +9,12 @@ import config
 import db
 import assembly
 from assembly import AssemblySettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("Assembly efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="as_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -110,7 +110,7 @@ orders = assembly.rate_orders(raw, S)
 if orders.empty:
     st.info("Every order in this period belongs to a login that is left out in config.py (ASM_EXCLUDED_LOGINS)."); st.stop()
 names = assembly.person_order(orders)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by the date the order was assembled) - {len(orders):,} orders read. Weeks and months at the edges may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 chosen = st.multiselect("People", names, default=names, key="as_chosen")
 view = orders[orders["name"].isin(chosen)] if chosen else orders.iloc[0:0]
 rated_view = view[view["rated"]]
@@ -119,14 +119,10 @@ rated_view = view[view["rated"]]
 ov = assembly.overview_table(view, S)
 tot = ov.loc["Team"]
 n_all, n_rated = len(view), int(view["rated"].sum())
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="Standard seconds / actual seconds over rated orders. 100% = at the standard; above 100% = faster.")
-c2.metric("Standard", f"{S.std_per_code:g} s per drug code", help="Seconds allowed for each different drug code in an order.")
 c3.metric("Orders assembled", f"{n_all:,}", help=f"{n_rated:,} could be rated ({(n_rated / n_all if n_all else 0):.0%})")
-spc = rated_view["dur"].sum() / rated_view["codes"].sum() if n_rated and rated_view["codes"].sum() > 0 else np.nan
-c4.metric("Actual seconds per drug code", "-" if np.isnan(spc) else f"{spc:.1f} s",
-          help="Total time of the rated orders / their drug codes. Compare it with the standard.")
 st.caption("100% = at the standard for the order's drug codes; above 100% = faster. Time = first inventory subtraction of the order to TGR, on the assembler's login.")
 
 tab_ov, tab_w, tab_m, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly", "Review flags", "How it works"])
@@ -134,14 +130,9 @@ tab_ov, tab_w, tab_m, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly",
 # ------------------------------------------------------------------- overview
 with tab_ov:
     st.subheader("Each person against the standard")
-    show = pd.DataFrame({
-        "Orders": ov["orders"].astype(int), "Rated": ov["rated"].astype(int), "Share rated": ov["share_rated"],
-        "Drug codes (rated)": ov["codes"].astype(int), "Average seconds per order": ov["avg_sec"], "Efficiency": ov["efficiency"],
-    })
+    show = pd.DataFrame({"Orders": ov["orders"].astype(int), "Average seconds per order": ov["avg_sec"], "Efficiency": ov["efficiency"]})
     disp = show.copy()
-    for c in ("Orders", "Rated", "Drug codes (rated)"):
-        disp[c] = show[c].map("{:,}".format)
-    disp["Share rated"] = show["Share rated"].map(lambda v: "-" if pd.isna(v) else f"{v:.0%}")
+    disp["Orders"] = show["Orders"].map("{:,}".format)
     disp["Average seconds per order"] = show["Average seconds per order"].map(lambda v: "-" if pd.isna(v) else f"{v:,.0f}")
     disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
     eff = show["Efficiency"]
@@ -162,8 +153,6 @@ def period_tab(period, fmt):
     chart = e.drop(columns="Overall").T.drop(columns=["Team"], errors="ignore")
     if chart.notna().any().any():
         st.line_chart(chart)
-    st.markdown("**Orders rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -181,15 +170,15 @@ with tab_f:
                 "- **First subtraction after TGR**: the start cannot be after the end, so one of the stamps is wrong.\n"
                 f"- **Longer than the limit**: more than {S.max_sec / 60:g} minutes from the first subtraction to TGR - left open or put on hold.\n"
                 "- **No assembler recorded**: nobody to rate.")
-    st.markdown("**Orders over the limit or with a wrong stamp**")
-    ft = assembly.flags_table(view)
-    st.dataframe(ft.rename(columns={"name": "Person", "order_id": "Order id", "codes": "Drug codes", "first_sub": "First subtraction", "tgr": "Assembled (TGR)",
-                                    "dur": "Seconds", "std_sec": "Standard seconds", "review": "What to review"})
-                 .style.format({"First subtraction": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
-                                "Assembled (TGR)": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
-                                "Drug codes": "{:,.0f}", "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"),
-                 width="stretch", height=400, hide_index=True)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "assembly_review_flags.csv", "text/csv", key="as_dl_flags")
+    with st.expander("Show the individual orders (over the limit or with a wrong stamp)"):
+        ft = assembly.flags_table(view)
+        st.dataframe(ft.rename(columns={"name": "Person", "order_id": "Order id", "codes": "Drug codes", "first_sub": "First subtraction", "tgr": "Assembled (TGR)",
+                                        "dur": "Seconds", "std_sec": "Standard seconds", "review": "What to review"})
+                     .style.format({"First subtraction": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
+                                    "Assembled (TGR)": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
+                                    "Drug codes": "{:,.0f}", "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"),
+                     width="stretch", height=400, hide_index=True)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "assembly_review_flags.csv", "text/csv", key="as_dl_flags")
 
 # ------------------------------------------------------------------ how it works
 with tab_how:
@@ -217,6 +206,5 @@ Add the standard seconds and the actual seconds of a person's rated orders, then
 ### Caution
 Orders still in `active_orders` have no TGR stamp, so they appear only after they move to past or cancelled orders: the last few days can look thin.
 """)
-    with st.expander("Data checks"):
-        chk = assembly.data_checks(orders)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(assembly.data_checks(orders))

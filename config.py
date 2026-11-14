@@ -23,6 +23,9 @@ LOGIN_NAMES = {
     "ay9936370@gmail.com": "Anurag",         # scans RTO parcels in; not rated
 }
 
+# Logins left out of EVERY activity tab (their work is not shown anywhere, including past weeks): Mohit, Devendra
+EXCLUDED_LOGINS = {"mohitpatel639049@gmail.com", "deepak86650@gmail.com"}
+
 # Notes shown next to an executive on the overview table
 EXEC_NOTES = {
     "Devendra": "New executive - slower pace expected",

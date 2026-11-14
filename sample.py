@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from efficiency import exec_name
+from efficiency import exec_name, drop_excluded
 
 NOT_RATED = ["Not rated: overnight", "Not rated: end before start", "Not rated: missing timestamp", "Not rated: no items"]
 
@@ -55,7 +55,7 @@ def count_details(details) -> tuple[int, int]:
 
 
 def rate_samples(df: pd.DataFrame, s: SampleSettings) -> pd.DataFrame:
-    d = df.copy()
+    d = drop_excluded(df.copy(), "packer")
     for c in ["created_at", "shipping_time"]:
         d[c] = pd.to_datetime(d[c], errors="coerce")
     d["total_items"] = pd.to_numeric(d["total_items"], errors="coerce").fillna(0)

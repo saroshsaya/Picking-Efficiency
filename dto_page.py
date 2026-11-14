@@ -9,12 +9,12 @@ import config
 import db
 import dto
 from dto import DtoSettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("DTO efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="dt_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -106,8 +106,7 @@ if window_rows.empty:
 
 dtos = window_rows
 names = dto.person_order(dtos)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by the date the DTO ended) - {len(dtos):,} DTOs read. Weeks and months at the edges may be partial."
-           + (f" {undated:,} DTOs in the table have not been accepted yet and are left out." if undated else ""))
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 if not names:
     st.warning("No DTO in this period has been finished. See Review flags / How it works.")
 chosen = st.multiselect("People", names, default=names, key="dt_chosen")
@@ -118,14 +117,10 @@ rated_view = view[view["rated"]]
 ov = dto.overview_table(view, S)
 tot = ov.loc["Team"] if "Team" in ov.index else None
 fin_n = int(view["finished"].sum()); rated_n = int(view["rated"].sum()); same_n = int((view["status_text"] == dto.S_SAME).sum())
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if tot is None or pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="Standard seconds / actual seconds over rated DTOs. The standard is the time-study average, which includes a DTO with an issue, so compare people, weeks and months as well as the team figure.")
-c2.metric("Standard per DTO", f"{S.std_sec * (1 + S.allowance):.0f} s")
 c3.metric("DTOs finished", f"{fin_n:,}", help=f"{rated_n:,} rated")
-avg = rated_view["dur"].mean() if len(rated_view) else np.nan
-c4.metric("Average time of rated DTOs", "-" if np.isnan(avg) else f"{avg:.0f} s",
-          help="Compare with the standard: if it is far from it, the start and end stamps may not be the clicks that were timed in the study.")
 st.caption("100% = at the standard; above 100% = faster. Time = Start Return Processing to Return Handled, on the login that accepted the DTO.")
 if fin_n and same_n / fin_n >= 0.3:
     st.warning(f"For {same_n:,} of {fin_n:,} finished DTOs the start and the end are at the same recorded time, so they cannot be rated. "
@@ -136,20 +131,14 @@ tab_ov, tab_w, tab_m, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly",
 # ------------------------------------------------------------------- overview
 with tab_ov:
     st.subheader("Each person against the standard")
-    show = pd.DataFrame({
-        "Finished DTOs": ov["finished"].astype(int), "Rated": ov["rated"].astype(int), "Share rated": ov["share_rated"],
-        "Average seconds": ov["avg_sec"], "Efficiency": ov["efficiency"], "Note": ov["note"],
-    })
+    show = pd.DataFrame({"Finished DTOs": ov["finished"].astype(int), "Average seconds": ov["avg_sec"], "Efficiency": ov["efficiency"]})
     disp = show.copy()
-    disp["Share rated"] = show["Share rated"].map(lambda v: "-" if pd.isna(v) else f"{v:.0%}")
     disp["Average seconds"] = show["Average seconds"].map(lambda v: "-" if pd.isna(v) else f"{v:,.0f}")
     disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
     eff = show["Efficiency"]
     st.dataframe(disp.style.apply(lambda col: [cell_color(v) if pd.notna(v) and 0 < v < 5 else "" for v in eff], subset=["Efficiency"]), width="stretch")
     st.download_button("Download table (CSV)", show.to_csv().encode(), "dto_overview.csv", "text/csv", key="dt_dl_ov")
-    st.caption(f"Standard in use: {S.std_sec * (1 + S.allowance):.0f} seconds per DTO "
-               f"(time study average of 17 DTOs, 17-22 Oct 2026). Average rated time in this period: "
-               f"{'-' if np.isnan(avg) else f'{avg:,.0f} seconds'}.")
+    st.caption(f"Standard in use: {S.std_sec * (1 + S.allowance):.0f} seconds per DTO.")
 
 
 def period_tab(period, fmt):
@@ -163,11 +152,6 @@ def period_tab(period, fmt):
     st.dataframe(style_eff(e, p, S.low_sample), width="stretch")
     chart = e.drop(columns="Overall").T
     st.line_chart(chart.drop(columns=[c for c in ["Team"] if c in chart.columns]))
-    st.markdown("**DTOs rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Average seconds per DTO**")
-    mn = m["avg_sec"].copy(); mn.columns = e.columns
-    st.dataframe(mn.style.format("{:,.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -185,14 +169,15 @@ with tab_f:
                 "- **Too long**: the start or the end may have been missed, or the DTO spans a break or a night.\n"
                 "- **No start or end time yet**: not started or not finished.\n"
                 "- **Slow**: rated, but slower than the slow multiple in Settings. These stay in the efficiency figures.")
-    ft = dto.flags_table(view)
-    st.dataframe(ft.rename(columns={"name": "Person", "awb": "AWB", "spt": "Start", "trh": "End", "dur": "Seconds",
-                                    "std_sec": "Standard seconds", "review": "What to review"})
-                 .style.format({"Start": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
-                                "End": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
-                                "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"),
-                 width="stretch", height=400, hide_index=True)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "dto_review_flags.csv", "text/csv", key="dt_dl_flags")
+    with st.expander("Show the individual DTOs (not rated, and slow ones)"):
+        ft = dto.flags_table(view)
+        st.dataframe(ft.rename(columns={"name": "Person", "awb": "AWB", "spt": "Start", "trh": "End", "dur": "Seconds",
+                                        "std_sec": "Standard seconds", "review": "What to review"})
+                     .style.format({"Start": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
+                                    "End": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M:%S"),
+                                    "Seconds": "{:,.0f}", "Standard seconds": "{:.0f}"}, na_rep="-"),
+                     width="stretch", height=400, hide_index=True)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "dto_review_flags.csv", "text/csv", key="dt_dl_flags")
 
 # ------------------------------------------------------------------ how it works
 with tab_how:
@@ -225,8 +210,7 @@ The stored times are a mix of epoch milliseconds (13 digits, older module) and e
 If many DTOs show the same start and end, check the Data checks below: **start equals the Accept Return time** being high would mean Start Return Processing is not a separate click.
 
 ### Caution
-DTOs are few, so use the percentages as a guide and read the number of rated DTOs beside each one. The average rated time in the header should be near the standard; if it is far off, the stamps may not match the clicks that were timed.
+DTOs are few, so use the percentages as a guide and read the number of rated DTOs beside each one.
 """)
-    with st.expander("Data checks"):
-        chk = dto.data_checks(dtos)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(dto.data_checks(dtos))

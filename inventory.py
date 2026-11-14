@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from efficiency import exec_name
+from efficiency import exec_name, drop_excluded
 
 NOT_RATED = ["Not rated: overnight", "Not rated: too long", "Not rated: end before start", "Not rated: missing timestamp"]
 
@@ -33,7 +33,7 @@ class InvSettings:
 
 
 def rate_verifications(df: pd.DataFrame, s: InvSettings) -> pd.DataFrame:
-    d = df.copy()
+    d = drop_excluded(df.copy(), "checked_by")
     for c in ["verify_start", "verify_finish", "checked_time"]:
         d[c] = pd.to_datetime(d[c], errors="coerce") if c in d else pd.NaT
     for c in ["quantity_stated", "q_found"]:

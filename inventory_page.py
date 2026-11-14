@@ -9,12 +9,12 @@ import config
 import db
 import inventory as inv
 from inventory import InvSettings
-from ui_common import cell_color, style_eff
+from ui_common import cell_color, style_eff, settings_area, is_admin, data_checks_box
 
 # ------------------------------------------------------------------ top bar
 top_l, top_s, top_r = st.columns([6, 1.4, 1.4])
 top_l.title("Inventory efficiency vs the standard")
-settings_pop = top_s.popover("☰ Settings", use_container_width=True)
+settings_pop = settings_area(top_s)
 if top_r.button("Refresh data", use_container_width=True, key="iv_refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -107,7 +107,7 @@ if raw.empty:
 rows = inv.rate_verifications(raw, S)
 _qn = raw["qty_note"].iloc[0] if "qty_note" in raw.columns and len(raw) else ""
 names = inv.checker_order(rows)
-st.caption(f"{start:%d %b %Y} to {end:%d %b %Y} (IST, by date verified) - {len(raw):,} verifications read. Weeks and months at the edges may be partial.")
+st.caption(f"Showing {start:%d %b %Y} to {end:%d %b %Y}.")
 if not names:
     st.warning("No verification in this period could be rated. See Review flags for the reasons.")
 chosen = st.multiselect("Checkers", names, default=names, key="iv_chosen")
@@ -117,44 +117,36 @@ rated_view = view[view["rated"]]
 # ---------------------------------------------------------------------- header
 ov = inv.overview_table(view, S)
 tot = ov.loc["All checkers"] if "All checkers" in ov.index else None
-c1, c2, c3, c4 = st.columns(4)
+c1, c3, _, _ = st.columns(4)
 c1.metric("Efficiency (all selected)", "-" if tot is None or pd.isna(tot["efficiency"]) else f"{tot['efficiency']:.1%}",
           help="Standard seconds / actual seconds over rated verifications. The standard is the team mean, so the team sits near 100% by design.")
-c2.metric("Standard per verification", f"{S.std_sec / 60:.1f} min")
 c3.metric("Verifications", f"{len(rows):,}", help=f"{int(rows['rated'].sum()):,} rated")
-med = rated_view["dur"].median() / 60 if len(rated_view) else np.nan
-c4.metric("Median time of rated jobs", "-" if np.isnan(med) else f"{med:.1f} min")
 st.caption("100% = at the standard; above 100% = faster. Time = verify_start to checked_time, on the person who checked.")
 
 tab_ov, tab_w, tab_m, tab_f, tab_how = st.tabs(["Overview", "Weekly", "Monthly", "Review flags", "How it works"])
 
 with tab_ov:
     st.subheader("Each checker against the standard")
-    show = pd.DataFrame({
-        "Jobs rated": ov["jobs_rated"].astype(int), "Actual sec/job": ov["sec_per_job"], "Median sec": ov["median_sec"],
-        "Avg quantity found": ov["avg_qty"], "Efficiency": ov["efficiency"], "Above / below team": ov["verdict"], "Not rated": ov["not_rated"]})
-    show["Note"] = np.where(ov["jobs_rated"] == 0, "No rated jobs",
-                            np.where(ov["efficiency"].isna() & (ov.index != "All checkers"), f"Too few jobs (under {S.min_show}) - no efficiency shown", ""))
-    num = {"Actual sec/job": "{:.0f}", "Median sec": "{:.0f}", "Avg quantity found": "{:.0f}"}
+    show = pd.DataFrame({"Jobs rated": ov["jobs_rated"].astype(int), "Actual sec/job": ov["sec_per_job"], "Efficiency": ov["efficiency"]})
     disp = show.copy()
-    for c, fmt in num.items():
-        disp[c] = show[c].map(lambda v, fmt=fmt: "-" if pd.isna(v) else fmt.format(v))
+    disp["Actual sec/job"] = show["Actual sec/job"].map(lambda v: "-" if pd.isna(v) else f"{v:.0f}")
     disp["Efficiency"] = show["Efficiency"].map(lambda v: "-" if pd.isna(v) else f"{v:.1%}")
     eff = show["Efficiency"]
     st.dataframe(disp.style.apply(lambda col: [cell_color(v) if pd.notna(v) and 0 < v < 5 else "" for v in eff], subset=["Efficiency"]), width="stretch")
-    st.caption(f"A dash = fewer than {S.min_show} rated jobs (too few to judge a person) or none. Not rated = overnight, over the cap, or a timestamp problem.")
+    st.caption(f"A dash = fewer than {S.min_show} rated jobs (too few to judge a person) or none.")
     st.download_button("Download table (CSV)", show.to_csv().encode(), "inventory_overview.csv", "text/csv", key="iv_dl_ov")
-    nq = int(rows["q_found"].notna().sum())
-    if nq < len(rows):
-        st.caption(f"Quantity found matched for {nq:,} of {len(rows):,} verifications" + (f" ({_qn})." if _qn else ".") + " It is reference only - ratings do not use it.")
-    sug = inv.suggested_standard(rows); r2 = inv.quantity_r2(rows)
-    bits = []
-    if sug:
-        bits.append(f"Mean of rated jobs in this period: {sug:.0f} s (current standard {S.std_sec:.0f} s).")
-    if r2 is not None:
-        bits.append(f"Quantity found explains {r2:.0%} of the variation in time (R² {r2:.2f}), so no quantity term is used.")
-    if bits:
-        st.caption(" ".join(bits))
+    if is_admin():
+        nq = int(rows["q_found"].notna().sum())
+        if nq < len(rows):
+            st.caption(f"Quantity found matched for {nq:,} of {len(rows):,} verifications" + (f" ({_qn})." if _qn else ".") + " It is reference only - ratings do not use it.")
+        sug = inv.suggested_standard(rows); r2 = inv.quantity_r2(rows)
+        bits = []
+        if sug:
+            bits.append(f"Mean of rated jobs in this period: {sug:.0f} s (current standard {S.std_sec:.0f} s).")
+        if r2 is not None:
+            bits.append(f"Quantity found explains {r2:.0%} of the variation in time (R² {r2:.2f}), so no quantity term is used.")
+        if bits:
+            st.caption(" ".join(bits))
 
 
 def period_tab(period, fmt):
@@ -168,11 +160,6 @@ def period_tab(period, fmt):
     st.dataframe(style_eff(e, p, S.low_sample), width="stretch")
     chart = e.drop(columns="Overall").T
     st.line_chart(chart.drop(columns=[c for c in ["All checkers"] if c in chart.columns]))
-    st.markdown("**Jobs rated** (the work behind each percentage)")
-    st.dataframe(p.style.format("{:,.0f}", na_rep="-"), width="stretch")
-    st.markdown("**Actual sec per job**")
-    sec = m["sec_per_job"].copy(); sec.columns = e.columns
-    st.dataframe(sec.style.format("{:.0f}", na_rep="-"), width="stretch")
 
 
 with tab_w:
@@ -188,15 +175,16 @@ with tab_f:
     st.markdown("- **Too long**: over the cap - usually a break or an interruption, not slow work.\n"
                 "- **Overnight**: checked on a different day than it started.\n"
                 "- **End before start / missing timestamp**: a timestamp problem worth a look.")
-    ft = inv.flags_table(view)
-    kinds = sorted(ft["status_text"].unique())
-    pick = st.multiselect("Show", kinds, default=kinds, key="iv_flag_kinds")
-    ft = ft[ft["status_text"].isin(pick)] if pick else ft.iloc[0:0]
-    st.dataframe(ft.rename(columns={"name": "Checker", "drug_code": "Drug code", "verify_start": "Verify start", "checked_time": "Checked",
-                                    "dur": "Seconds", "q_found": "Quantity found", "status_text": "Status"})
-                 .style.format({"Verify start": lambda v: v.strftime("%d-%b-%y %H:%M"), "Checked": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M"),
-                                "Seconds": "{:,.0f}", "Quantity found": "{:,.0f}"}, na_rep="-"), width="stretch", height=400)
-    st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "inventory_review_flags.csv", "text/csv", key="iv_dl_flags")
+    with st.expander("Show the individual verifications"):
+        ft = inv.flags_table(view)
+        kinds = sorted(ft["status_text"].unique())
+        pick = st.multiselect("Show", kinds, default=kinds, key="iv_flag_kinds")
+        ft = ft[ft["status_text"].isin(pick)] if pick else ft.iloc[0:0]
+        st.dataframe(ft.rename(columns={"name": "Checker", "drug_code": "Drug code", "verify_start": "Verify start", "checked_time": "Checked",
+                                        "dur": "Seconds", "q_found": "Quantity found", "status_text": "Status"})
+                     .style.format({"Verify start": lambda v: v.strftime("%d-%b-%y %H:%M"), "Checked": lambda v: "-" if pd.isna(v) else v.strftime("%d-%b-%y %H:%M"),
+                                    "Seconds": "{:,.0f}", "Quantity found": "{:,.0f}"}, na_rep="-"), width="stretch", height=400)
+        st.download_button("Download flags (CSV)", ft.to_csv(index=False).encode(), "inventory_review_flags.csv", "text/csv", key="iv_dl_flags")
 
 with tab_how:
     st.markdown(f"""
@@ -219,6 +207,5 @@ Add the standard seconds and the actual seconds of a person's rated jobs, then d
 ### Caution
 Verification stamps only exist since 18 Aug 2026, so job counts are small. Use the percentages as a guide.
 """)
-    with st.expander("Data checks"):
-        chk = inv.data_checks(rows)
-        st.table(pd.DataFrame({"Check": list(chk.keys()), "Value": [f"{v:,}" if isinstance(v, int) else v for v in chk.values()]}))
+    if is_admin():
+        data_checks_box(inv.data_checks(rows))

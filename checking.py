@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from efficiency import exec_name
+from efficiency import exec_name, drop_excluded
 
 ID_TYPES = ["ID_CUBICLE", "ID_RACK"]
 QTY_TYPES = ["ST", "LT"]
@@ -38,7 +38,7 @@ class CheckSettings:
 
 
 def rate_tasks(df: pd.DataFrame, s: CheckSettings) -> pd.DataFrame:
-    d = df.copy()
+    d = drop_excluded(df.copy(), "checked_by")
     for c in ["created_at", "time"]:
         d[c] = pd.to_datetime(d[c], errors="coerce")
     d["qty_checked"] = pd.to_numeric(d["qty_checked"], errors="coerce")

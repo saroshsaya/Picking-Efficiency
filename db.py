@@ -219,6 +219,45 @@ ORDER BY ms;
 """
 
 
+# Assembly: orders marked assembled (TGR) inside the window, from past_orders and cancelled_orders, each joined INSIDE the database to
+# the earliest inventory subtraction of the same phone number + order id. Only the assembler, the drug code count, the order id and
+# the two times come back - no phone numbers. Stamps are text: 13 digits = milliseconds, 10 digits = seconds; anything else is empty.
+ASSEMBLY_QUERY = """
+WITH o AS (
+    SELECT TRIM(phone_number::text) AS phone, TRIM(order_id::text) AS oid, pharmacist::text AS assembler,
+           n_items::text AS n_items, TRIM("TGR"::text) AS tgr
+    FROM "past_orders"
+    UNION ALL
+    SELECT TRIM(phone_number::text), TRIM(order_id::text), pharmacist::text, n_items::text, TRIM("TGR"::text)
+    FROM "cancelled_orders"
+), n AS (
+    SELECT o.*,
+           CASE WHEN tgr ~ '^[0-9]{13}$' THEN tgr::bigint
+                WHEN tgr ~ '^[0-9]{10}$' THEN tgr::bigint * 1000 END AS tgr_ms
+    FROM o
+), w AS (                                   -- one row per order: if it is in both tables, keep the later TGR
+    SELECT DISTINCT ON (phone, oid) phone, oid, assembler, n_items, tgr_ms
+    FROM n
+    WHERE tgr_ms >= %(start_ms)s AND tgr_ms < %(end_ms)s
+    ORDER BY phone, oid, tgr_ms DESC
+), s AS (
+    SELECT i.phone, i.oid, MIN(i.ms) AS first_sub_ms
+    FROM (
+        SELECT TRIM(phone_number::text) AS phone, TRIM(order_id::text) AS oid,
+               CASE WHEN TRIM("timestamp"::text) ~ '^[0-9]{13}$' THEN TRIM("timestamp"::text)::bigint
+                    WHEN TRIM("timestamp"::text) ~ '^[0-9]{10}$' THEN TRIM("timestamp"::text)::bigint * 1000 END AS ms
+        FROM "inventory_subtractions"
+    ) i
+    JOIN w ON w.phone = i.phone AND w.oid = i.oid
+    GROUP BY i.phone, i.oid
+)
+SELECT w.assembler, w.n_items, w.oid AS order_id, w.tgr_ms, s.first_sub_ms
+FROM w
+LEFT JOIN s ON s.phone = w.phone AND s.oid = w.oid
+ORDER BY w.tgr_ms;
+"""
+
+
 def _run_query(db: dict, query: str, params: dict) -> pd.DataFrame:
     import psycopg2
     conn = psycopg2.connect(host=db["host"], port=int(db["port"]), user=db["user"],
@@ -347,6 +386,13 @@ def fetch_moves(start_ms: int, end_ms: int) -> pd.DataFrame:
     """Move: only moves submitted (move_time) inside the window are read, times converted to IST. Cached per window for 15 minutes."""
     import move
     return move.prepare(_fetch(MOVE_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)}))
+
+
+@st.cache_data(ttl=900, max_entries=30, show_spinner="Reading the selected dates from the database...")
+def fetch_assembly(start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Assembly: orders with TGR inside the window and each order's first inventory subtraction. Cached per window for 15 minutes."""
+    import assembly
+    return assembly.prepare(_fetch(ASSEMBLY_QUERY, {"start_ms": int(start_ms), "end_ms": int(end_ms)}))
 
 
 def load_csv(file_or_path) -> pd.DataFrame:

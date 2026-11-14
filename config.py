@@ -115,10 +115,22 @@ DTO_LOGIN_NAMES = {
 # ---- Move (stock moved from an LT rack to an ST cubicle): MOVE pressed (move_start) -> SUBMIT pressed (move_time) ----
 # Standard seconds for one move = MOVE_STD_FIXED + MOVE_STD_PER_UNIT x units moved (units = cumulative_change).
 # Fixed + per-unit seconds come from the move time study (Time_Study_Move.xlsx).
-MOVE_STD_FIXED = 180.0          # seconds every move needs (time study: 24 move sessions, 37 moves, ~180 s of working time per move)
-MOVE_STD_PER_UNIT = 0.0         # quantity did not change the time in the study (R2 0.017), so the standard is flat
-MOVE_MIN_SEC = 2                # a shorter MOVE-to-SUBMIT is the same moment (stamped together): not rated
+MOVE_STD_FIXED = 325.0          # seconds every move needs: time study fit 308 s + 17 s delay between the study end time and the Submit stamp
+MOVE_STD_PER_UNIT = 0.196       # extra seconds per unit moved (time study fit)
+MOVE_MIN_SEC = 0                # every timed move is rated (no shortest time)
 MOVE_MAX_SEC = 1800             # a longer one is a break or a start left open: not rated
 MOVE_SLOW_X = 3                 # rated moves slower than this many times their standard are listed on Review flags
 MOVE_START_FROM = "12 Nov 2026" # the first day the start stamp (move_start) exists; earlier moves cannot be timed
 MOVE_EXCLUDED_LOGINS = set()    # logins whose moves are left out, e.g. {"someone@example.com"}
+
+
+# ---- Assembly: first inventory subtraction of the order -> TGR (order marked assembled) ----
+# Standard seconds for one order = ASM_STD_FIXED + ASM_STD_PER_CODE x number of different drug codes in the order (n_items).
+# The quantity of each drug is not used. Same numbers as Assembly_Efficiency.xlsx (Settings sheet).
+ASM_STD_FIXED = 0.0             # fixed seconds per order (none: the time grows with the number of drug codes)
+ASM_STD_PER_CODE = 7.7          # seconds per different drug code, for the part the system stamps (first subtraction to TGR)
+ASM_MAX_SEC = 900               # longer than 15 minutes = left open or put on hold: not rated
+ASM_EXCLUDED_LOGINS = {         # not rated on assembly: Shivangi, Dhruv, Aryan, Mohit, Devendra
+    "shivangi12.301@gmail.com", "dmg@saya.net.in", "aryanrawat229@gmail.com",
+    "mohitpatel639049@gmail.com", "deepak86650@gmail.com",
+}
